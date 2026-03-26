@@ -40,7 +40,7 @@ type Plugin struct {
 
 func init() {
 	plugin.RegisterPlugin(&Plugin{
-		Version: "1.0.0",
+		Version: "2026.3.26",
 	})
 }
 
