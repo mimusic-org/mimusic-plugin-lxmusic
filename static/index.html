@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>洛雪音源</title>
+    <link rel="stylesheet" href="/api/v1/plugin/lxmusic/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>🎵 洛雪音源</h1>
+        <p class="description">导入洛雪音源脚本，搜索和导入网络歌曲</p>
+        
+        <!-- 音源管理区域 -->
+        <div class="section">
+            <h2>音源管理</h2>
+            <div class="source-controls">
+                <input type="file" id="sourceFile" accept=".js,.zip" style="display:none">
+                <button id="importBtn" class="btn btn-primary">导入音源</button>
+                <span class="hint">支持 .js 和 .zip 格式</span>
+            </div>
+            <div id="sourceList" class="source-list"></div>
+        </div>
+        
+        <!-- 搜索区域 -->
+        <div class="section">
+            <h2>歌曲搜索</h2>
+            <div class="search-controls">
+                <select id="sourceSelect" class="select">
+                    <option value="">请先导入音源</option>
+                </select>
+                <input type="text" id="keyword" class="input" placeholder="输入歌曲名或歌手名...">
+                <button id="searchBtn" class="btn btn-primary" disabled>搜索</button>
+            </div>
+        </div>
+        
+        <!-- 搜索结果 -->
+        <div class="section" id="resultSection" style="display:none">
+            <h2>搜索结果 <span id="resultCount"></span></h2>
+            <div class="result-controls">
+                <label class="checkbox-label"><input type="checkbox" id="selectAll"> 全选</label>
+                <button id="importSongsBtn" class="btn btn-success" disabled>导入选中歌曲</button>
+                <span id="selectedCount" class="selected-count">已选 0 首</span>
+            </div>
+            <div id="resultList" class="result-list"></div>
+            <div class="pagination" id="pagination"></div>
+        </div>
+        
+        <!-- 导入进度 -->
+        <div class="section" id="importProgress" style="display:none">
+            <h2>导入进度</h2>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div class="progress-text" id="progressText">准备中...</div>
+            <div id="importResults" class="import-results"></div>
+        </div>
+        
+        <!-- Toast 消息 -->
+        <div id="toast" class="toast"></div>
+    </div>
+    <script src="/api/v1/plugin/lxmusic/static/js/app.js"></script>
+</body>
+</html>
