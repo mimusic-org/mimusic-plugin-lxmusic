@@ -4,13 +4,8 @@ go 1.26
 
 require (
 	github.com/knqyf263/go-plugin v0.9.0
-	github.com/mimusic-org/plugin v0.1.0
+	github.com/mimusic-org/plugin v0.1.1
 	github.com/mimusic-org/plugin/pkg/go-plugin-http v0.0.0-20260325033135-fdc3bec42e20
-)
-
-replace (
-	github.com/mimusic-org/plugin => ../../plugin
-	github.com/mimusic-org/plugin/pkg/go-plugin-http => ../../plugin/pkg/go-plugin-http
 )
 
 require (
