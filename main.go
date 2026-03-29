@@ -27,7 +27,8 @@ var staticFS embed.FS
 
 // Plugin 插件结构体
 type Plugin struct {
-	Version string
+	Version  string
+	pluginID int64
 
 	staticHandler  *plugin.StaticHandler
 	sourceManager  *source.Manager
@@ -60,7 +61,8 @@ func (p *Plugin) GetPluginInfo(ctx context.Context, request *emptypb.Empty) (*pb
 }
 
 func (p *Plugin) Init(ctx context.Context, request *pbplugin.InitRequest) (*emptypb.Empty, error) {
-	slog.Info("正在初始化洛雪音源插件", "version", p.Version)
+	p.pluginID = request.GetPluginId()
+	slog.Info("正在初始化洛雪音源插件", "version", p.Version, "pluginID", p.pluginID)
 
 	const dataDir = "/lxmusic"
 
@@ -103,7 +105,7 @@ func (p *Plugin) Init(ctx context.Context, request *pbplugin.InitRequest) (*empt
 			}
 			src := enabledSources[index]
 			slog.Info("正在异步加载音源", "id", src.ID, "name", src.Name, "progress", fmt.Sprintf("%d/%d", index+1, len(enabledSources)))
-			if err := p.runtimeManager.LoadSource(src.ID, src.Script); err != nil {
+			if err := p.runtimeManager.LoadSource(src.ID, src.Script, p.pluginID); err != nil {
 				slog.Warn("加载已启用音源失败", "id", src.ID, "name", src.Name, "error", err)
 			} else {
 				slog.Info("已加载音源", "id", src.ID, "name", src.Name)
@@ -120,7 +122,7 @@ func (p *Plugin) Init(ctx context.Context, request *pbplugin.InitRequest) (*empt
 	}
 
 	// 6. 初始化处理器
-	p.sourceHandler = handlers.NewSourceHandler(p.sourceManager, p.runtimeManager)
+	p.sourceHandler = handlers.NewSourceHandler(p.sourceManager, p.runtimeManager, p.pluginID)
 	p.searchHandler = handlers.NewSearchHandler(p.registry, p.runtimeManager, p.urlmapStore)
 
 	// 7. 获取路由管理器

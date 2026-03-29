@@ -8,12 +8,10 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
-
-	"github.com/dop251/goja"
 )
 
 // ValidateJSContent 验证 JS 文件内容是否合法
-// 检查内容不为空、是合法 UTF-8、能被 goja 编译
+// 检查内容不为空、是合法 UTF-8（语法验证由 cqjs QuickJS 引擎在运行时完成）
 func ValidateJSContent(content []byte) error {
 	// 检查内容不为空
 	if len(content) == 0 {
@@ -23,12 +21,6 @@ func ValidateJSContent(content []byte) error {
 	// 检查是否为合法 UTF-8 文本
 	if !utf8.Valid(content) {
 		return errors.New("content is not valid UTF-8")
-	}
-
-	// 尝试使用 goja 编译，验证是否为合法 JavaScript
-	_, err := goja.Compile("", string(content), false)
-	if err != nil {
-		return err
 	}
 
 	return nil

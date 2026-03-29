@@ -22,13 +22,15 @@ import (
 type SourceHandler struct {
 	manager        *source.Manager
 	runtimeManager *engine.RuntimeManager
+	pluginID       int64
 }
 
 // NewSourceHandler 创建音源处理器
-func NewSourceHandler(manager *source.Manager, runtimeManager *engine.RuntimeManager) *SourceHandler {
+func NewSourceHandler(manager *source.Manager, runtimeManager *engine.RuntimeManager, pluginID int64) *SourceHandler {
 	return &SourceHandler{
 		manager:        manager,
 		runtimeManager: runtimeManager,
+		pluginID:       pluginID,
 	}
 }
 
@@ -103,7 +105,7 @@ func (h *SourceHandler) HandleImportSource(req *http.Request) (*plugin.RouterRes
 		}
 		// 如果音源默认启用，自动加载到 RuntimeManager
 		if info.Enabled {
-			if loadErr := h.runtimeManager.LoadSource(info.ID, info.Script); loadErr != nil {
+			if loadErr := h.runtimeManager.LoadSource(info.ID, info.Script, h.pluginID); loadErr != nil {
 				slog.Warn("自动加载音源失败", "id", info.ID, "error", loadErr)
 			}
 		}
@@ -119,7 +121,7 @@ func (h *SourceHandler) HandleImportSource(req *http.Request) (*plugin.RouterRes
 		// 对每个导入的音源，如果默认启用，自动加载到 RuntimeManager
 		for _, info := range sources {
 			if info.Enabled {
-				if loadErr := h.runtimeManager.LoadSource(info.ID, info.Script); loadErr != nil {
+				if loadErr := h.runtimeManager.LoadSource(info.ID, info.Script, h.pluginID); loadErr != nil {
 					slog.Warn("自动加载音源失败", "id", info.ID, "error", loadErr)
 				}
 			}
@@ -210,7 +212,7 @@ func (h *SourceHandler) HandleImportSourceFromURL(req *http.Request) (*plugin.Ro
 
 	// 如果音源默认启用，自动加载到 RuntimeManager
 	if info.Enabled {
-		if err := h.runtimeManager.LoadSource(info.ID, info.Script); err != nil {
+		if err := h.runtimeManager.LoadSource(info.ID, info.Script, h.pluginID); err != nil {
 			slog.Warn("自动加载音源失败", "id", info.ID, "error", err)
 			// 不影响导入结果，继续返回成功
 		}
@@ -245,7 +247,7 @@ func (h *SourceHandler) HandleToggleSource(req *http.Request) (*plugin.RouterRes
 		if err != nil {
 			return plugin.ErrorResponse(http.StatusInternalServerError, "获取音源脚本失败: "+err.Error()), nil
 		}
-		if err := h.runtimeManager.LoadSource(body.ID, script); err != nil {
+		if err := h.runtimeManager.LoadSource(body.ID, script, h.pluginID); err != nil {
 			// 加载失败，回滚启用状态
 			_ = h.manager.DisableSource(body.ID)
 			return plugin.ErrorResponse(http.StatusInternalServerError, "加载音源失败: "+err.Error()), nil

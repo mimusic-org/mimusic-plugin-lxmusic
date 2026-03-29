@@ -1,6 +1,6 @@
 //go:build wasip1
 
-// Package engine 封装 goja JS 运行时，用于执行洛雪音源脚本。
+// Package engine 通过 cqjs proto 接口执行洛雪音源脚本。
 package engine
 
 import (
@@ -22,13 +22,13 @@ func NewRuntimeManager() *RuntimeManager {
 }
 
 // LoadSource 创建音源运行时并缓存
-func (rm *RuntimeManager) LoadSource(sourceID string, script string) error {
+func (rm *RuntimeManager) LoadSource(sourceID string, script string, pluginID int64) error {
 	// 如果已存在，先卸载
 	if _, exists := rm.runtimes[sourceID]; exists {
 		rm.UnloadSource(sourceID)
 	}
 
-	sr, err := NewSourceRuntime(sourceID, script)
+	sr, err := NewSourceRuntime(sourceID, script, pluginID)
 	if err != nil {
 		return fmt.Errorf("create source runtime for %s: %w", sourceID, err)
 	}
@@ -48,9 +48,9 @@ func (rm *RuntimeManager) UnloadSource(sourceID string) {
 }
 
 // ReloadSource 卸载并重新加载
-func (rm *RuntimeManager) ReloadSource(sourceID string, script string) error {
+func (rm *RuntimeManager) ReloadSource(sourceID string, script string, pluginID int64) error {
 	rm.UnloadSource(sourceID)
-	return rm.LoadSource(sourceID, script)
+	return rm.LoadSource(sourceID, script, pluginID)
 }
 
 // GetRuntime 获取指定源的运行时

@@ -1,93 +1,157 @@
 //go:build wasip1
 
-// Package engine 封装 goja JS 运行时，用于执行洛雪音源脚本。
+// Package engine 通过 cqjs proto 接口执行洛雪音源脚本。
 package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"regexp"
 	"strings"
+	"sync/atomic"
 
-	"github.com/dop251/goja"
-	"github.com/mimusic-org/plugin/api/plugin"
+	"github.com/mimusic-org/plugin/api/pbplugin"
 )
 
+// requestIDCounter 全局请求 ID 计数器
+var requestIDCounter uint64
+
+// nextRequestID 生成唯一的请求 ID
+func nextRequestID() string {
+	id := atomic.AddUint64(&requestIDCounter, 1)
+	return fmt.Sprintf("req_%d", id)
+}
+
 // SourceRuntime 单个音源的持久化运行时
+// 通过 proto 接口与主程序的 cqjs JS 运行时通信
 type SourceRuntime struct {
-	sourceID    string
-	vm          *goja.Runtime
-	lxAPI       *LxAPI
-	config      *SourceConfig
-	flushTimers func() // setTimeout/setInterval 的 flush 函数
+	sourceID string
+	envID    string // cqjs 环境 ID
+	config   *SourceConfig
+	pluginID int64
 }
 
 // NewSourceRuntime 创建并初始化一个音源运行时
-// 流程：创建 VM → 注入 lx.* API → setupGlobals → 执行脚本 → 等待 inited → 返回
-func NewSourceRuntime(sourceID string, script string) (*SourceRuntime, error) {
-	return NewSourceRuntimeWithContext(context.Background(), sourceID, script)
+func NewSourceRuntime(sourceID string, script string, pluginID int64) (*SourceRuntime, error) {
+	return NewSourceRuntimeWithContext(context.Background(), sourceID, script, pluginID)
 }
 
 // NewSourceRuntimeWithContext 创建并初始化一个音源运行时（携带 context）
-func NewSourceRuntimeWithContext(ctx context.Context, sourceID string, script string) (*SourceRuntime, error) {
-	vm := goja.New()
+// 流程：CreateJSEnv(prelude) → ExecuteJS(设置 scriptInfo) → ExecuteJS(脚本) → 解析 inited 事件
+func NewSourceRuntimeWithContext(ctx context.Context, sourceID string, script string, pluginID int64) (*SourceRuntime, error) {
+	hostFunctions := pbplugin.NewHostFunctions()
 
-	// 解析脚本元数据
-	scriptInfo := parseScriptInfo(script)
+	envID := fmt.Sprintf("lx_%s_%d", sourceID, pluginID)
 
-	// 创建并注入 lx API
-	lxAPI := NewLxAPI(vm)
-	if err := lxAPI.InjectLxAPI(scriptInfo); err != nil {
-		return nil, fmt.Errorf("inject lx API: %w", err)
+	// 1. 创建 JS 环境，注入 lx_prelude.js 作为初始化代码
+	createResp, err := hostFunctions.CreateJSEnv(ctx, &pbplugin.CreateJSEnvRequest{
+		EnvId:    envID,
+		InitCode: LxPreludeJS,
+		PluginId: pluginID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create JS env: %w", err)
+	}
+	if !createResp.GetSuccess() {
+		return nil, fmt.Errorf("create JS env failed: %s", createResp.GetMessage())
 	}
 
-	// 设置 console.log 等
-	setupConsole(vm)
+	// 2. 解析脚本元数据并注入 lx.currentScriptInfo
+	scriptInfo := parseScriptInfo(script)
+	injectCode := fmt.Sprintf(
+		`globalThis.lx.currentScriptInfo = {name: %s, description: %s, version: %s, author: %s, homepage: %s, rawScript: ""};`,
+		jsonString(scriptInfo.Name),
+		jsonString(scriptInfo.Description),
+		jsonString(scriptInfo.Version),
+		jsonString(scriptInfo.Author),
+		jsonString(scriptInfo.Homepage),
+	)
 
-	// 设置全局 API（setTimeout/setInterval/require 等）
-	flushTimers := setupGlobals(ctx, vm)
-
-	// 执行脚本
-	_, err := vm.RunString(script)
+	injectResp, err := hostFunctions.ExecuteJS(ctx, &pbplugin.ExecuteJSRequest{
+		EnvId:     envID,
+		Code:      injectCode,
+		TimeoutMs: 5000,
+		PluginId:  pluginID,
+	})
 	if err != nil {
+		// 清理环境
+		hostFunctions.DestroyJSEnv(ctx, &pbplugin.DestroyJSEnvRequest{EnvId: envID, PluginId: pluginID})
+		return nil, fmt.Errorf("inject scriptInfo: %w", err)
+	}
+	if !injectResp.GetSuccess() {
+		hostFunctions.DestroyJSEnv(ctx, &pbplugin.DestroyJSEnvRequest{EnvId: envID, PluginId: pluginID})
+		return nil, fmt.Errorf("inject scriptInfo failed: %s", injectResp.GetMessage())
+	}
+
+	// 3. 执行音源脚本
+	execResp, err := hostFunctions.ExecuteJS(ctx, &pbplugin.ExecuteJSRequest{
+		EnvId:     envID,
+		Code:      script,
+		TimeoutMs: 30000,
+		PluginId:  pluginID,
+	})
+	if err != nil {
+		hostFunctions.DestroyJSEnv(ctx, &pbplugin.DestroyJSEnvRequest{EnvId: envID, PluginId: pluginID})
 		return nil, fmt.Errorf("execute script: %w", err)
 	}
+	if !execResp.GetSuccess() {
+		hostFunctions.DestroyJSEnv(ctx, &pbplugin.DestroyJSEnvRequest{EnvId: envID, PluginId: pluginID})
+		return nil, fmt.Errorf("execute script failed: %s", execResp.GetMessage())
+	}
 
-	// 刷新 Promise microtask 队列（处理脚本中 lx.request().then() 等异步链）
-	_, _ = vm.RunString("")
+	// 4. 从 events 中解析 "inited" 事件获取 SourceConfig
+	var config *SourceConfig
+	for _, evt := range execResp.GetEvents() {
+		if evt.GetName() == "inited" {
+			var cfg SourceConfig
+			if err := json.Unmarshal([]byte(evt.GetData()), &cfg); err != nil {
+				slog.Warn("解析 inited 事件数据失败", "error", err, "data", evt.GetData())
+				// 尝试从嵌套结构解析
+				var wrapper map[string]json.RawMessage
+				if err2 := json.Unmarshal([]byte(evt.GetData()), &wrapper); err2 == nil {
+					if sourcesData, ok := wrapper["sources"]; ok {
+						var sources map[string]SourceEntry
+						if err3 := json.Unmarshal(sourcesData, &sources); err3 == nil {
+							cfg.Sources = sources
+							config = &cfg
+						}
+					}
+				}
+			} else {
+				config = &cfg
+			}
+			break
+		}
+	}
 
-	// 执行 setTimeout 注册的回调
-	flushTimers()
-
-	// 再次刷新 microtask 队列（timer 回调可能产生新的 Promise 链）
-	_, _ = vm.RunString("")
-
-	// 获取 SourceConfig
-	config := lxAPI.GetSourceConfig()
 	if config == nil {
+		hostFunctions.DestroyJSEnv(ctx, &pbplugin.DestroyJSEnvRequest{EnvId: envID, PluginId: pluginID})
 		return nil, fmt.Errorf("script did not call send('inited', ...)")
 	}
 
 	sr := &SourceRuntime{
-		sourceID:    sourceID,
-		vm:          vm,
-		lxAPI:       lxAPI,
-		config:      config,
-		flushTimers: flushTimers,
+		sourceID: sourceID,
+		envID:    envID,
+		config:   config,
+		pluginID: pluginID,
 	}
 
-	slog.Info("SourceRuntime 创建成功", "sourceID", sourceID, "sources", len(config.Sources))
+	slog.Info("SourceRuntime 创建成功", "sourceID", sourceID, "envID", envID, "sources", len(config.Sources))
 
 	return sr, nil
 }
 
 // CallRequest 调用已加载脚本的 request handler
-// 不再重新创建 VM，直接在已有 VM 上调用
+// 通过 lx._dispatch(requestId, "request", payload) 触发 JS 侧的事件处理器
 // source: 来源平台标识（如 "kw", "tx"）
 // action: 动作类型（如 "musicUrl"）
 // info: 请求信息
 func (sr *SourceRuntime) CallRequest(source string, action string, info map[string]interface{}) (interface{}, error) {
+	hostFunctions := pbplugin.NewHostFunctions()
+	ctx := context.Background()
+
 	// 构建请求参数
 	payload := map[string]interface{}{
 		"source": source,
@@ -95,29 +159,69 @@ func (sr *SourceRuntime) CallRequest(source string, action string, info map[stri
 		"info":   info,
 	}
 
-	// 调用 request 事件处理器
-	slog.Info("CallRequest: 调用 request handler", "sourceID", sr.sourceID, "source", source, "action", action)
-	result, err := sr.lxAPI.CallEventHandler("request", payload)
+	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
-		slog.Error("CallRequest: handler 返回错误", "error", err)
-		return nil, fmt.Errorf("call request handler: %w", err)
+		return nil, fmt.Errorf("marshal payload: %w", err)
 	}
 
-	// 处理返回值
-	if result == nil || goja.IsUndefined(result) || goja.IsNull(result) {
-		slog.Warn("CallRequest: handler 返回 nil/undefined/null")
-		return nil, nil
+	requestID := nextRequestID()
+
+	// 构建 JS 调用代码
+	code := fmt.Sprintf(`lx._dispatch(%s, "request", %s);`, jsonString(requestID), string(payloadJSON))
+
+	slog.Info("CallRequest: 调用 request handler", "sourceID", sr.sourceID, "source", source, "action", action, "requestID", requestID)
+
+	resp, err := hostFunctions.ExecuteJS(ctx, &pbplugin.ExecuteJSRequest{
+		EnvId:          sr.envID,
+		Code:           code,
+		TimeoutMs:      30000,
+		PluginId:       sr.pluginID,
+		WaitEventNames: []string{"dispatchResult", "dispatchError"},
+	})
+	if err != nil {
+		slog.Error("CallRequest: ExecuteJS 失败", "error", err)
+		return nil, fmt.Errorf("execute JS: %w", err)
 	}
 
-	// 检查是否为 Promise
-	exported := result.Export()
-	slog.Debug("CallRequest: handler 返回值类型", "type", fmt.Sprintf("%T", exported))
-	if p, ok := exported.(*goja.Promise); ok {
-		slog.Debug("CallRequest: 开始解析 Promise", "state", p.State())
-		return resolvePromise(sr.vm, p)
+	// 从 events 中查找 dispatchResult 或 dispatchError
+	for _, evt := range resp.GetEvents() {
+		switch evt.GetName() {
+		case "dispatchResult":
+			var result struct {
+				ID     string      `json:"id"`
+				Result interface{} `json:"result"`
+			}
+			if err := json.Unmarshal([]byte(evt.GetData()), &result); err != nil {
+				slog.Warn("CallRequest: 解析 dispatchResult 失败", "error", err, "data", evt.GetData())
+				continue
+			}
+			if result.ID == requestID {
+				slog.Info("CallRequest: 成功获取结果", "sourceID", sr.sourceID, "requestID", requestID)
+				return result.Result, nil
+			}
+		case "dispatchError":
+			var errResult struct {
+				ID    string `json:"id"`
+				Error string `json:"error"`
+			}
+			if err := json.Unmarshal([]byte(evt.GetData()), &errResult); err != nil {
+				slog.Warn("CallRequest: 解析 dispatchError 失败", "error", err, "data", evt.GetData())
+				continue
+			}
+			if errResult.ID == requestID {
+				slog.Error("CallRequest: handler 返回错误", "error", errResult.Error)
+				return nil, fmt.Errorf("request handler error: %s", errResult.Error)
+			}
+		}
 	}
 
-	return exported, nil
+	// 如果没有找到匹配的事件，检查执行是否成功
+	if !resp.GetSuccess() {
+		return nil, fmt.Errorf("execute JS failed: %s", resp.GetMessage())
+	}
+
+	slog.Warn("CallRequest: 未收到 dispatch 事件", "requestID", requestID)
+	return nil, fmt.Errorf("no dispatch result received for request %s", requestID)
 }
 
 // GetMusicUrl 获取播放 URL
@@ -129,6 +233,7 @@ func (sr *SourceRuntime) GetMusicUrl(source, quality string, musicInfo map[strin
 	}
 
 	// 调用 request 处理器
+	slog.Info("GetMusicUrl: 调用 request handler", "info", info)
 	result, err := sr.CallRequest(source, "musicUrl", info)
 	if err != nil {
 		return "", err
@@ -190,265 +295,25 @@ func (sr *SourceRuntime) SourceID() string {
 
 // Close 关闭并清理运行时资源
 func (sr *SourceRuntime) Close() {
-	// goja.Runtime 没有显式的 Close 方法
-	// 将引用置为 nil，让 GC 回收
-	sr.vm = nil
-	sr.lxAPI = nil
+	hostFunctions := pbplugin.NewHostFunctions()
+	ctx := context.Background()
+
+	_, err := hostFunctions.DestroyJSEnv(ctx, &pbplugin.DestroyJSEnvRequest{
+		EnvId:    sr.envID,
+		PluginId: sr.pluginID,
+	})
+	if err != nil {
+		slog.Warn("销毁 JS 环境失败", "envID", sr.envID, "error", err)
+	}
+
 	sr.config = nil
-	sr.flushTimers = nil
-	slog.Info("SourceRuntime 已关闭", "sourceID", sr.sourceID)
+	slog.Info("SourceRuntime 已关闭", "sourceID", sr.sourceID, "envID", sr.envID)
 }
 
-// resolvePromise 等待 goja Promise 解析完成
-// 通过反复执行 vm.RunString("") 来 flush microtask 队列
-// 由于 lx.request() 是同步的，Promise 链不涉及真正的异步等待
-func resolvePromise(vm *goja.Runtime, p *goja.Promise) (interface{}, error) {
-	const maxIterations = 1000
-	for i := 0; i < maxIterations; i++ {
-		switch p.State() {
-		case goja.PromiseStateFulfilled:
-			result := p.Result()
-			if result == nil || goja.IsUndefined(result) || goja.IsNull(result) {
-				slog.Warn("resolvePromise: Promise fulfilled with nil/undefined")
-				return nil, nil
-			}
-			// 如果结果仍然是 Promise，递归解析
-			if nestedP, ok := result.Export().(*goja.Promise); ok {
-				return resolvePromise(vm, nestedP)
-			}
-			return result.Export(), nil
-		case goja.PromiseStateRejected:
-			result := p.Result()
-			if result == nil || goja.IsUndefined(result) || goja.IsNull(result) {
-				slog.Error("resolvePromise: Promise rejected", "result", nil)
-				return nil, fmt.Errorf("promise rejected")
-			}
-			// 优先使用 result.String() 提取 JS Error 的完整信息（如 "Error: HTTP 403"）
-			// result.Export() 对 Error 对象会返回空 map，丢失错误消息
-			errMsg := result.String()
-			slog.Error("resolvePromise: Promise rejected", "result", errMsg)
-			return nil, fmt.Errorf("promise rejected: %s", errMsg)
-		default:
-			// Promise 仍然 Pending，flush microtask 队列
-			_, _ = vm.RunString("")
-		}
-	}
-	return nil, fmt.Errorf("promise did not resolve after %d iterations", maxIterations)
-}
-
-// setupConsole 设置 console 对象
-func setupConsole(vm *goja.Runtime) {
-	console := vm.NewObject()
-
-	logFunc := func(level string) func(goja.FunctionCall) goja.Value {
-		return func(call goja.FunctionCall) goja.Value {
-			args := make([]interface{}, len(call.Arguments))
-			for i, arg := range call.Arguments {
-				args[i] = arg.Export()
-			}
-			switch level {
-			case "debug":
-				slog.Debug("JS console", "args", args)
-			case "info":
-				slog.Info("JS console", "args", args)
-			case "warn":
-				slog.Warn("JS console", "args", args)
-			case "error":
-				slog.Error("JS console", "args", args)
-			default:
-				slog.Info("JS console", "args", args)
-			}
-			return goja.Undefined()
-		}
-	}
-
-	_ = console.Set("log", logFunc("info"))
-	_ = console.Set("debug", logFunc("debug"))
-	_ = console.Set("info", logFunc("info"))
-	_ = console.Set("warn", logFunc("warn"))
-	_ = console.Set("error", logFunc("error"))
-
-	_ = vm.Set("console", console)
-}
-
-// setupGlobals 注入浏览器/Node.js 全局 API 到 goja 运行时
-// 返回 flushTimers 函数，需在 vm.RunString(script) 之后调用以执行 delay≤0 的 setTimeout 回调
-// delay≤0 的 setTimeout/setInterval：收集到 pendingCallbacks，由 flushTimers 同步执行
-// delay>0 的 setTimeout/setInterval：通过 plugin.GetTimerManager().RegisterDelayTimer() 真正异步执行
-func setupGlobals(ctx context.Context, vm *goja.Runtime) (flushTimers func()) {
-	var syncTimerID int64
-	var pendingCallbacks []goja.Callable
-
-	// asyncCallbacks: goTimerID -> JS 函数（用于 setTimeout delay>0）
-	asyncCallbacks := make(map[uint64]goja.Callable)
-
-	// intervalCallbacks: intervalID -> JS 函数（用于 setInterval delay>0）
-	intervalCallbacks := make(map[uint64]goja.Callable)
-	// intervalCancelled: intervalID -> 是否已取消
-	intervalCancelled := make(map[uint64]bool)
-	// intervalCurrentGoID: intervalID -> 当前等待中的 goTimerID（用于 clearInterval 取消）
-	intervalCurrentGoID := make(map[uint64]uint64)
-
-	tm := plugin.GetTimerManager()
-
-	// setTimeout(callback, delay) -> timerId
-	vm.Set("setTimeout", func(call goja.FunctionCall) goja.Value {
-		if len(call.Arguments) < 1 {
-			return goja.Undefined()
-		}
-		fn, ok := goja.AssertFunction(call.Argument(0))
-		if !ok {
-			return goja.Undefined()
-		}
-
-		delay := int64(0)
-		if len(call.Arguments) >= 2 {
-			delay = call.Argument(1).ToInteger()
-		}
-
-		if delay <= 0 {
-			// 同步路径：收集到 pendingCallbacks，由 flushTimers 执行
-			syncTimerID++
-			pendingCallbacks = append(pendingCallbacks, fn)
-			return vm.ToValue(syncTimerID)
-		}
-
-		// 异步路径：注册真正的延迟定时器
-		// 先声明 ID 变量，再在闭包中引用（避免 Go 闭包不能在赋值前引用自身的问题）
-		var asyncTimerID uint64
-		capturedFn := fn
-		asyncTimerID = tm.RegisterDelayTimer(ctx, delay, func() {
-			if f, ok := asyncCallbacks[asyncTimerID]; ok {
-				_, err := f(goja.Undefined())
-				if err != nil {
-					slog.Warn("异步 setTimeout 回调执行失败", "error", err)
-				}
-				delete(asyncCallbacks, asyncTimerID)
-			}
-		})
-		asyncCallbacks[asyncTimerID] = capturedFn
-		return vm.ToValue(asyncTimerID)
-	})
-
-	// clearTimeout(timerID)
-	vm.Set("clearTimeout", func(call goja.FunctionCall) goja.Value {
-		if len(call.Arguments) < 1 {
-			return goja.Undefined()
-		}
-		id := uint64(call.Argument(0).ToInteger())
-		delete(asyncCallbacks, id)
-		_ = tm.CancelTimer(ctx, id)
-		return goja.Undefined()
-	})
-
-	// setInterval(callback, delay) -> intervalID
-	vm.Set("setInterval", func(call goja.FunctionCall) goja.Value {
-		if len(call.Arguments) < 1 {
-			return goja.Undefined()
-		}
-		fn, ok := goja.AssertFunction(call.Argument(0))
-		if !ok {
-			return goja.Undefined()
-		}
-
-		delay := int64(0)
-		if len(call.Arguments) >= 2 {
-			delay = call.Argument(1).ToInteger()
-		}
-
-		if delay <= 0 {
-			// 同步路径：只执行一次（语义上退化为 setTimeout）
-			syncTimerID++
-			pendingCallbacks = append(pendingCallbacks, fn)
-			return vm.ToValue(syncTimerID)
-		}
-
-		// 为 setInterval 分配一个稳定的 intervalID（使用 uint64，避免与 syncTimerID 混淆）
-		// 借用 tm 的 nextID 策略：先注册一个占位定时器拿到 ID，再取消它
-		placeholderID := tm.RegisterDelayTimer(ctx, delay, func() {})
-		_ = tm.CancelTimer(ctx, placeholderID)
-		intervalID := placeholderID
-
-		intervalCallbacks[intervalID] = fn
-		intervalCancelled[intervalID] = false
-
-		// 递归注册：每次回调执行后再注册下一个
-		var registerNext func()
-		registerNext = func() {
-			if intervalCancelled[intervalID] {
-				return
-			}
-			goTimerID := tm.RegisterDelayTimer(ctx, delay, func() {
-				if intervalCancelled[intervalID] {
-					return
-				}
-				if f, ok := intervalCallbacks[intervalID]; ok {
-					_, err := f(goja.Undefined())
-					if err != nil {
-						slog.Warn("setInterval 回调执行失败", "error", err)
-					}
-				}
-				if !intervalCancelled[intervalID] {
-					registerNext()
-				}
-			})
-			intervalCurrentGoID[intervalID] = goTimerID
-		}
-		registerNext()
-
-		return vm.ToValue(intervalID)
-	})
-
-	// clearInterval(intervalID)
-	vm.Set("clearInterval", func(call goja.FunctionCall) goja.Value {
-		if len(call.Arguments) < 1 {
-			return goja.Undefined()
-		}
-		id := uint64(call.Argument(0).ToInteger())
-		intervalCancelled[id] = true
-		delete(intervalCallbacks, id)
-		if goID, ok := intervalCurrentGoID[id]; ok {
-			_ = tm.CancelTimer(ctx, goID)
-			delete(intervalCurrentGoID, id)
-		}
-		return goja.Undefined()
-	})
-
-	// require - 返回空对象，用于 feature detection
-	vm.Set("require", func(call goja.FunctionCall) goja.Value {
-		return vm.NewObject()
-	})
-
-	// console.group / console.groupEnd - no-op（一些音源使用）
-	consoleVal := vm.Get("console")
-	if consoleObj, ok := consoleVal.(*goja.Object); ok {
-		consoleObj.Set("group", func(call goja.FunctionCall) goja.Value {
-			return goja.Undefined()
-		})
-		consoleObj.Set("groupEnd", func(call goja.FunctionCall) goja.Value {
-			return goja.Undefined()
-		})
-	}
-
-	// 返回 flush 函数：只处理 pendingCallbacks（delay≤0 的同步回调）
-	return func() {
-		for i := 0; i < 10; i++ { // 最多 10 轮，防止无限循环
-			if len(pendingCallbacks) == 0 {
-				break
-			}
-			// 取出当前所有待执行的回调
-			callbacks := pendingCallbacks
-			pendingCallbacks = nil
-			for _, cb := range callbacks {
-				_, err := cb(goja.Undefined())
-				if err != nil {
-					slog.Warn("执行定时器回调失败", "error", err)
-				}
-			}
-			// 每轮回调执行后刷新 Promise microtask 队列
-			_, _ = vm.RunString("")
-		}
-	}
+// jsonString 将字符串转为 JSON 字符串字面量（带引号和转义）
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }
 
 // jsdocPattern 匹配 JSDoc 注释块 (/** ... */)

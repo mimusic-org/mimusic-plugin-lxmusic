@@ -25,3 +25,5 @@ go/pkg/
 # OS specific
 .DS_Store
 Thumbs.db
+
+lxserver/
