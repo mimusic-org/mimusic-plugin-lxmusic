@@ -495,6 +495,7 @@ async function importSelectedSongs() {
     importBtn.textContent = '导入中...';
     
     try {
+        console.log('Importing songs:', songs);
         const response = await fetch(`${API_BASE}/songs/import`, {
             method: 'POST',
             headers: getAuthHeaders(),
@@ -523,6 +524,7 @@ async function importSelectedSongs() {
             
             if (data.success > 0) {
                 showToast(`成功导入 ${data.success} 首歌曲`, 'success');
+                console.log(`成功导入 ${data.success}歌曲`)
             }
             if (data.failed > 0) {
                 showToast(`${data.failed} 首歌曲导入失败`, 'error');

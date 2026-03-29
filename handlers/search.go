@@ -198,6 +198,7 @@ func (h *SearchHandler) HandleImportSongs(req *http.Request) (*plugin.RouterResp
 			addSongBody["playlist_id"] = request.PlaylistID
 		}
 		bodyBytes, _ := json.Marshal(addSongBody)
+		slog.Info("调用主程序 API 添加远程歌曲", "body", string(bodyBytes))
 
 		resp, err := hostFunctions.CallRouter(req.Context(), &pbplugin.CallRouterRequest{
 			Method: "POST",
