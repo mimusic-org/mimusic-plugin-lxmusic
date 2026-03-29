@@ -177,15 +177,21 @@ globalThis.lx = {
         };
     },
 
-    // Send event to Go side via __cqjs_send bridge function
+    // Send event to Go side via __go_send bridge function
     send: function(eventName, data) {
+        console.error('[lx.send] eventName=' + eventName);
         if (eventName === 'inited') {
             if (data && data.sources) {
                 _registeredSources = data.sources;
+                console.error('[lx.send] inited sources=' + JSON.stringify(Object.keys(data.sources)));
+            } else {
+                console.error('[lx.send] inited but no sources in data');
             }
         }
-        if (typeof __cqjs_send === 'function') {
-            __cqjs_send(eventName, JSON.stringify(data));
+        if (typeof __go_send === 'function') {
+            __go_send(eventName, JSON.stringify(data));
+        } else {
+            console.error('[lx.send] __go_send is not a function!');
         }
     },
 
@@ -196,13 +202,13 @@ globalThis.lx = {
 
     // Dispatch event to registered handler (called from Go side via dispatch request).
     // The handler may return a Promise; the resolved/rejected value is sent back
-    // to Go via __cqjs_send('dispatchResult', ...) / __cqjs_send('dispatchError', ...).
+    // to Go via __go_send('dispatchResult', ...) / __go_send('dispatchError', ...).
     // A 25-second timeout protects against handlers whose Promise never settles.
     _dispatch: function(requestId, eventName, data) {
         var handler = _eventHandlers.get(eventName);
         if (typeof handler !== 'function') {
-            if (typeof __cqjs_send === 'function') {
-                __cqjs_send('dispatchError', JSON.stringify({
+            if (typeof __go_send === 'function') {
+                __go_send('dispatchError', JSON.stringify({
                     id: requestId,
                     error: 'No handler registered for event: ' + eventName
                 }));
@@ -216,8 +222,8 @@ globalThis.lx = {
             if (settled) return;
             settled = true;
             console.error('[_dispatch] sendResult called, requestId=' + requestId + ' value=' + (typeof value === 'string' ? value.substring(0, 200) : String(value)));
-            if (typeof __cqjs_send === 'function') {
-                __cqjs_send('dispatchResult', JSON.stringify({
+            if (typeof __go_send === 'function') {
+                __go_send('dispatchResult', JSON.stringify({
                     id: requestId,
                     result: value
                 }));
@@ -229,8 +235,8 @@ globalThis.lx = {
             settled = true;
             var errMsg = (err && err.message) ? err.message : String(err);
             console.error('[_dispatch] sendError called, requestId=' + requestId + ' error=' + errMsg);
-            if (typeof __cqjs_send === 'function') {
-                __cqjs_send('dispatchError', JSON.stringify({
+            if (typeof __go_send === 'function') {
+                __go_send('dispatchError', JSON.stringify({
                     id: requestId,
                     error: errMsg
                 }));
