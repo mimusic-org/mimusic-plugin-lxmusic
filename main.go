@@ -94,19 +94,17 @@ func (p *Plugin) Init(ctx context.Context, request *pbplugin.InitRequest) (*empt
 		return &emptypb.Empty{}, fmt.Errorf("failed to init urlmap store: %w", err)
 	}
 
-	// 6. 异步加载已启用的音源（避免阻塞 Init）
+	// 6. 设置定时器函数并异步加载已启用的音源（避免阻塞 Init）
+	tm := plugin.GetTimerManager()
+	p.sourceManager.SetRegisterTimerFunc(func(delayMilliseconds int64, callback func()) {
+		tm.RegisterDelayTimer(ctx, delayMilliseconds, callback)
+	})
+
 	enabledSources := p.sourceManager.GetEnabledSources()
 	if len(enabledSources) > 0 {
 		slog.Info("将异步加载已启用音源", "total", len(enabledSources))
-		tm := plugin.GetTimerManager()
-		// 延迟加载所有已启用的音源
 		tm.RegisterDelayTimer(ctx, 100, func() {
-			errors := p.sourceManager.LoadEnabledSources()
-			if len(errors) > 0 {
-				slog.Warn("部分音源加载失败", "failed", len(errors), "loaded", p.runtimeManager.Count())
-			} else {
-				slog.Info("异步加载已启用音源完成", "loaded", p.runtimeManager.Count(), "total", len(enabledSources))
-			}
+			p.sourceManager.LoadEnabledSources()
 		})
 	}
 

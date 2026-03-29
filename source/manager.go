@@ -17,13 +17,17 @@ import (
 // LoadFunc 定义加载音源的函数类型
 type LoadFunc func(sourceID string, script string, pluginID int64) error
 
+// RegisterTimerFunc 定义注册延迟定时器的函数类型
+type RegisterTimerFunc func(delayMilliseconds int64, callback func())
+
 // Manager 管理已导入的音源
 type Manager struct {
-	sources   map[string]*SourceInfo // ID -> SourceInfo
-	idCounter int                    // ID 计数器（用于生成唯一 ID）
-	storage   *Storage               // 持久化存储
-	loadFunc  LoadFunc               // 加载函数（由外部设置）
-	pluginID  int64                  // 插件 ID（用于加载函数）
+	sources       map[string]*SourceInfo // ID -> SourceInfo
+	idCounter     int                    // ID 计数器（用于生成唯一 ID）
+	storage       *Storage               // 持久化存储
+	loadFunc      LoadFunc               // 加载函数（由外部设置）
+	pluginID      int64                  // 插件 ID（用于加载函数）
+	registerTimer RegisterTimerFunc      // 注册延迟定时器函数（由外部设置）
 }
 
 // NewManager 创建一个新的音源管理器
@@ -54,6 +58,11 @@ func NewManager(baseDir string) (*Manager, error) {
 func (m *Manager) SetLoadFunc(fn LoadFunc, pluginID int64) {
 	m.loadFunc = fn
 	m.pluginID = pluginID
+}
+
+// SetRegisterTimerFunc 设置注册延迟定时器函数
+func (m *Manager) SetRegisterTimerFunc(fn RegisterTimerFunc) {
+	m.registerTimer = fn
 }
 
 // loadFromDisk 从磁盘加载已持久化的音源
@@ -409,14 +418,43 @@ func (m *Manager) LoadSource(sourceID string) error {
 }
 
 // LoadEnabledSources 加载所有已启用的音源
-func (m *Manager) LoadEnabledSources() []error {
-	var errors []error
+// 使用 RegisterDelayTimer 逐帧加载，每帧加载一个音源
+func (m *Manager) LoadEnabledSources() {
+	if m.registerTimer == nil {
+		slog.Warn("LoadEnabledSources: registerTimer not set")
+		return
+	}
+
+	// 收集所有已启用的音源 ID
+	var enabledIDs []string
 	for _, info := range m.sources {
 		if info.Enabled {
-			if err := m.LoadSource(info.ID); err != nil {
-				errors = append(errors, fmt.Errorf("load %s: %w", info.ID, err))
-			}
+			enabledIDs = append(enabledIDs, info.ID)
 		}
 	}
-	return errors
+
+	if len(enabledIDs) == 0 {
+		return
+	}
+
+	slog.Info("开始逐帧加载已启用音源", "total", len(enabledIDs))
+
+	// 递归注册定时器，每帧加载一个音源
+	m.loadSourceByIndex(enabledIDs, 0)
+}
+
+// loadSourceByIndex 通过定时器逐帧加载音源
+func (m *Manager) loadSourceByIndex(ids []string, index int) {
+	if index >= len(ids) {
+		slog.Info("所有已启用音源加载完成", "total", len(ids))
+		return
+	}
+
+	sourceID := ids[index]
+	_ = m.LoadSource(sourceID)
+
+	// 注册下一帧加载下一个音源
+	m.registerTimer(100, func() {
+		m.loadSourceByIndex(ids, index+1)
+	})
 }
