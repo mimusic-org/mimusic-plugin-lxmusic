@@ -139,11 +139,18 @@ func (h *SearchHandler) HandleImportSongs(req *http.Request) (*plugin.RouterResp
 	successCount := 0
 	failedCount := 0
 
-	// 逐个处理歌曲
+	// 第一步：为每首歌曲生成 hash，收集成功项到 batch 列表
+	type batchItem struct {
+		song    musicsdk.SearchItem
+		hash    string
+		musicUrl string
+	}
+	var batch []batchItem
+
 	for _, song := range request.Songs {
 		result := ImportResult{Name: song.Name}
 
-		// 1. 构建 songInfo（包含平台特有字段）
+		// 构建 songInfo
 		songInfo := map[string]interface{}{
 			"name":    song.Name,
 			"singer":  song.Singer,
@@ -151,7 +158,6 @@ func (h *SearchHandler) HandleImportSongs(req *http.Request) (*plugin.RouterResp
 			"source":  song.Source,
 			"musicId": song.MusicID,
 		}
-		// 添加平台特有字段
 		if song.Hash != "" {
 			songInfo["hash"] = song.Hash
 		}
@@ -171,7 +177,6 @@ func (h *SearchHandler) HandleImportSongs(req *http.Request) (*plugin.RouterResp
 			songInfo["albumId"] = song.AlbumID
 		}
 
-		// 2. 用 urlmap.Store.Put 生成 hash
 		hash, err := h.urlmapStore.Put(songInfo, quality, song.Source)
 		if err != nil {
 			slog.Error("生成 URL hash 失败", "name", song.Name, "error", err)
@@ -182,23 +187,26 @@ func (h *SearchHandler) HandleImportSongs(req *http.Request) (*plugin.RouterResp
 			continue
 		}
 
-		// 3. 构造歌曲 URL 为 /api/v1/plugin/lxmusic/api/music/url/{hash}
 		musicUrl := "/api/v1/plugin/lxmusic/api/music/url/" + hash
+		batch = append(batch, batchItem{song: song, hash: hash, musicUrl: musicUrl})
+	}
 
-		// 4. 调用主程序 API 添加远程歌曲
-		addSongBody := map[string]interface{}{
-			"title":     song.Name,
-			"artist":    song.Singer,
-			"album":     song.Album,
-			"url":       musicUrl,
-			"cover_url": song.Img,
+	// 第二步：如果有成功生成 hash 的条目，一次批量调用主程序 API
+	if len(batch) > 0 {
+		var batchBody []map[string]interface{}
+		for _, item := range batch {
+			body := map[string]interface{}{
+				"title":     item.song.Name,
+				"artist":    item.song.Singer,
+				"album":     item.song.Album,
+				"url":       item.musicUrl,
+				"cover_url": item.song.Img,
+			}
+			batchBody = append(batchBody, body)
 		}
-		// 如果有 playlist_id，添加到请求中
-		if request.PlaylistID > 0 {
-			addSongBody["playlist_id"] = request.PlaylistID
-		}
-		bodyBytes, _ := json.Marshal(addSongBody)
-		slog.Info("调用主程序 API 添加远程歌曲", "body", string(bodyBytes))
+
+		bodyBytes, _ := json.Marshal(batchBody)
+		slog.Info("批量调用主程序 API 添加歌曲", "count", len(batch))
 
 		resp, err := hostFunctions.CallRouter(req.Context(), &pbplugin.CallRouterRequest{
 			Method: "POST",
@@ -206,27 +214,33 @@ func (h *SearchHandler) HandleImportSongs(req *http.Request) (*plugin.RouterResp
 			Body:   bodyBytes,
 		})
 
-		if err != nil {
-			slog.Error("调用主程序 API 失败", "name", song.Name, "error", err)
-			result.Success = false
-			result.Error = "添加歌曲失败: " + err.Error()
-			results = append(results, result)
-			failedCount++
-			continue
+		if err != nil || !resp.Success {
+			errMsg := "调用主程序 API 失败"
+			if err != nil {
+				errMsg += ": " + err.Error()
+			} else {
+				errMsg += ": " + resp.Message
+			}
+			slog.Error(errMsg, "count", len(batch))
+			// 批量请求失败，所有 batch 项均为失败
+			for _, item := range batch {
+				results = append(results, ImportResult{
+					Name:    item.song.Name,
+					Success: false,
+					Error:   "添加失败: " + errMsg,
+				})
+				failedCount++
+			}
+		} else {
+			for _, item := range batch {
+				results = append(results, ImportResult{
+					Name:    item.song.Name,
+					Success: true,
+				})
+				successCount++
+				slog.Info("歌曲导入成功", "name", item.song.Name, "hash", item.hash)
+			}
 		}
-
-		if !resp.Success {
-			result.Success = false
-			result.Error = "添加歌曲失败: " + resp.Message
-			results = append(results, result)
-			failedCount++
-			continue
-		}
-
-		result.Success = true
-		results = append(results, result)
-		successCount++
-		slog.Info("歌曲导入成功", "name", song.Name, "hash", hash)
 	}
 
 	// 返回结果统计
