@@ -145,6 +145,7 @@ func (h *SearchHandler) HandleImportSongs(req *http.Request) (*plugin.RouterResp
 		song     musicsdk.SearchItem
 		hash     string
 		musicUrl string
+		songInfo map[string]interface{} // 保存 songInfo 供歌词获取使用
 	}
 	var batch []batchItem
 
@@ -189,7 +190,7 @@ func (h *SearchHandler) HandleImportSongs(req *http.Request) (*plugin.RouterResp
 		}
 
 		musicUrl := "/api/v1/plugin/lxmusic/api/music/url/" + hash
-		batch = append(batch, batchItem{song: song, hash: hash, musicUrl: musicUrl})
+		batch = append(batch, batchItem{song: song, hash: hash, musicUrl: musicUrl, songInfo: songInfo})
 	}
 
 	// 第二步：如果有成功生成 hash 的条目，一次批量调用主程序 API
@@ -233,13 +234,29 @@ func (h *SearchHandler) HandleImportSongs(req *http.Request) (*plugin.RouterResp
 				failedCount++
 			}
 		} else {
-			for _, item := range batch {
+			// 解析响应获取新添加歌曲的 ID
+			var addResp struct {
+				Songs []struct {
+					ID int64 `json:"id"`
+				} `json:"songs"`
+			}
+			if jsonErr := json.Unmarshal(resp.Body, &addResp); jsonErr != nil {
+				slog.Error("解析添加歌曲响应失败", "error", jsonErr)
+			}
+
+			for i, item := range batch {
 				results = append(results, ImportResult{
 					Name:    item.song.Name,
 					Success: true,
 				})
 				successCount++
 				slog.Info("歌曲导入成功", "name", item.song.Name, "hash", item.hash)
+
+				// 第三步：获取歌词并更新（导入成功后）
+				if i < len(addResp.Songs) {
+					songID := addResp.Songs[i].ID
+					h.fetchAndUpdateLyric(req, hostFunctions, songID, item.song.Source, item.songInfo)
+				}
 			}
 		}
 	}
@@ -261,6 +278,55 @@ func (h *SearchHandler) HandleImportSongs(req *http.Request) (*plugin.RouterResp
 		Headers:    map[string]string{"Content-Type": "application/json"},
 		Body:       body,
 	}, nil
+}
+
+// fetchAndUpdateLyric 获取歌词并更新到歌曲库（失败时静默跳过）
+func (h *SearchHandler) fetchAndUpdateLyric(req *http.Request, hostFunctions pbplugin.HostFunctions, songID int64, source string, songInfo map[string]interface{}) {
+	// 获取对应平台的 LyricFetcher
+	fetcher, ok := h.registry.GetLyricFetcher(source)
+	if !ok {
+		slog.Debug("平台不支持歌词获取", "source", source)
+		return
+	}
+
+	// 获取歌词
+	result, err := fetcher.GetLyric(songInfo)
+	if err != nil {
+		slog.Warn("获取歌词失败", "songID", songID, "source", source, "error", err)
+		return
+	}
+
+	// 检查歌词是否为空
+	if result.Lyric == "" {
+		slog.Debug("歌词为空", "songID", songID, "source", source)
+		return
+	}
+
+	// 调用 PUT /api/v1/songs/{id}/lyrics 更新歌词
+	lyricPayload := map[string]string{
+		"lyrics":       result.Lyric,
+		"lyric_source": "scraped",
+	}
+	lyricBody, _ := json.Marshal(lyricPayload)
+
+	lyricResp, err := hostFunctions.CallRouter(req.Context(), &pbplugin.CallRouterRequest{
+		Method: "PUT",
+		Path:   fmt.Sprintf("/api/v1/songs/%d/lyrics", songID),
+		Body:   lyricBody,
+	})
+
+	if err != nil || !lyricResp.Success {
+		errMsg := "更新歌词失败"
+		if err != nil {
+			errMsg += ": " + err.Error()
+		} else {
+			errMsg += ": " + lyricResp.Message
+		}
+		slog.Warn(errMsg, "songID", songID)
+		return
+	}
+
+	slog.Info("歌词更新成功", "songID", songID, "source", source)
 }
 
 // HandleGetMusicUrl 获取播放 URL（通过 hash 查找）

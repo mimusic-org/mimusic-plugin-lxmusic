@@ -17,15 +17,17 @@ type PlatformInfo struct {
 
 // Registry 搜索器注册表
 type Registry struct {
-	searchers map[string]Searcher
-	order     []string // 保持注册顺序
+	searchers     map[string]Searcher
+	lyricFetchers map[string]LyricFetcher
+	order         []string // 保持注册顺序
 }
 
 // NewRegistry 创建新的注册表
 func NewRegistry() *Registry {
 	return &Registry{
-		searchers: make(map[string]Searcher),
-		order:     []string{},
+		searchers:     make(map[string]Searcher),
+		lyricFetchers: make(map[string]LyricFetcher),
+		order:         []string{},
 	}
 }
 
@@ -56,4 +58,15 @@ func (r *Registry) All() []PlatformInfo {
 		}
 	}
 	return platforms
+}
+
+// RegisterLyricFetcher 注册歌词获取器
+func (r *Registry) RegisterLyricFetcher(f LyricFetcher) {
+	r.lyricFetchers[f.ID()] = f
+}
+
+// GetLyricFetcher 获取指定 ID 的歌词获取器
+func (r *Registry) GetLyricFetcher(id string) (LyricFetcher, bool) {
+	f, ok := r.lyricFetchers[id]
+	return f, ok
 }
