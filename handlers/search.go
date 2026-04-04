@@ -224,6 +224,7 @@ func (h *SearchHandler) HandleImportSongs(req *http.Request) (*plugin.RouterResp
 				"album":     item.song.Album,
 				"url":       item.musicUrl,
 				"cover_url": item.song.Img,
+				"duration":  float64(item.song.Duration),
 			}
 			batchBody = append(batchBody, body)
 		}
