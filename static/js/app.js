@@ -192,6 +192,9 @@ function renderSources() {
                     作者: ${escapeHtml(source.author || '-')} &nbsp;|&nbsp;
                     ${source.imported_at ? new Date(source.imported_at).toLocaleString() : '-'}
                 </div>
+                ${source.platforms && source.platforms.length > 0
+                    ? '<div class="platform-chips">' + source.platforms.map(p => '<span class="chip chip-platform">' + escapeHtml(p) + '</span>').join('') + '</div>'
+                    : ''}
             </div>
             <div class="list-item-trailing">
                 <label class="md-switch" title="${source.enabled ? '已启用' : '已禁用'}">

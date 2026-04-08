@@ -39,20 +39,35 @@ func NewSourceHandler(manager *source.Manager, runtimeManager *engine.RuntimeMan
 func (h *SourceHandler) HandleListSources(req *http.Request) (*plugin.RouterResponse, error) {
 	sources := h.manager.ListSources()
 
-	// 构建响应（不包含 Script 字段，包含 Enabled 字段）
+	// 构建响应（不包含 Script 字段，包含 Enabled 和 Platforms 字段）
 	type SourceItem struct {
-		ID          string `json:"id"`
-		Name        string `json:"name"`
-		Version     string `json:"version"`
-		Description string `json:"description"`
-		Author      string `json:"author"`
-		Filename    string `json:"filename"`
-		ImportedAt  string `json:"imported_at"`
-		Enabled     bool   `json:"enabled"`
+		ID          string   `json:"id"`
+		Name        string   `json:"name"`
+		Version     string   `json:"version"`
+		Description string   `json:"description"`
+		Author      string   `json:"author"`
+		Filename    string   `json:"filename"`
+		ImportedAt  string   `json:"imported_at"`
+		Enabled     bool     `json:"enabled"`
+		Platforms   []string `json:"platforms"`
 	}
 
 	items := make([]SourceItem, 0, len(sources))
 	for _, s := range sources {
+		// 从 runtime 缓存中获取该音源支持的平台列表
+		var platforms []string
+		if sr, ok := h.runtimeManager.GetRuntime(s.ID); ok {
+			if cfg := sr.Config(); cfg != nil && cfg.Sources != nil {
+				platforms = make([]string, 0, len(cfg.Sources))
+				for platform := range cfg.Sources {
+					platforms = append(platforms, platform)
+				}
+			}
+		}
+		if platforms == nil {
+			platforms = []string{}
+		}
+
 		items = append(items, SourceItem{
 			ID:          s.ID,
 			Name:        s.Name,
@@ -62,6 +77,7 @@ func (h *SourceHandler) HandleListSources(req *http.Request) (*plugin.RouterResp
 			Filename:    s.Filename,
 			ImportedAt:  s.ImportedAt,
 			Enabled:     s.Enabled,
+			Platforms:   platforms,
 		})
 	}
 

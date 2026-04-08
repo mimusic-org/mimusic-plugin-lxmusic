@@ -338,6 +338,20 @@ body {
     font-weight: 500;
 }
 
+/* Platform chips row */
+.platform-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 4px;
+}
+.chip-platform {
+    background: var(--md-surface-variant);
+    color: var(--md-on-surface-variant);
+    font-size: 11px;
+    padding: 1px 8px;
+}
+
 /* Badge */
 .badge {
     display: inline-flex;
