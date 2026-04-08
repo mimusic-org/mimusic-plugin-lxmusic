@@ -143,18 +143,19 @@ func (h *SearchHandler) HandleImportSongs(req *http.Request) (*plugin.RouterResp
 	failedCount := 0
 	var importedSongIDs []int64
 
-	// 第一步：为每首歌曲生成 hash，收集成功项到 batch 列表
+	// 第一步：为每首歌曲构建 songInfo，收集到批处理列表
 	type batchItem struct {
 		song     musicsdk.SearchItem
 		hash     string
 		musicUrl string
-		songInfo map[string]interface{} // 保存 songInfo 供歌词获取使用
+		songInfo map[string]interface{}
 	}
 	var batch []batchItem
 
-	for _, song := range request.Songs {
-		result := ImportResult{Name: song.Name}
+	// 收集所有待写入的 PutBatchItem
+	var putBatchItems []urlmap.PutBatchItem
 
+	for _, song := range request.Songs {
 		// 归一化：musicId 和 songmid 互为 fallback（wy/kw 的 musicId 与 songmid 是同一个值）
 		musicID := song.MusicID
 		if musicID == "" {
@@ -200,18 +201,34 @@ func (h *SearchHandler) HandleImportSongs(req *http.Request) (*plugin.RouterResp
 			songInfo["albumId"] = song.AlbumID
 		}
 
-		hash, err := h.urlmapStore.Put(songInfo, quality, song.Source)
-		if err != nil {
-			slog.Error("生成 URL hash 失败", "name", song.Name, "error", err)
-			result.Success = false
-			result.Error = "生成 URL 映射失败: " + err.Error()
-			results = append(results, result)
-			failedCount++
-			continue
-		}
+		putBatchItems = append(putBatchItems, urlmap.PutBatchItem{
+			SongInfo: songInfo,
+			Quality:  quality,
+			Platform: song.Source,
+		})
+		batch = append(batch, batchItem{song: song, songInfo: songInfo})
+	}
 
-		musicUrl := "/api/v1/plugin/lxmusic/api/music/url/" + hash
-		batch = append(batch, batchItem{song: song, hash: hash, musicUrl: musicUrl, songInfo: songInfo})
+	// 批量生成 hash，只执行一次磁盘持久化（替代循环内逐个 Put + save）
+	if len(putBatchItems) > 0 {
+		hashes, err := h.urlmapStore.PutBatch(putBatchItems)
+		if err != nil {
+			slog.Error("批量生成 URL hash 失败", "error", err)
+			for _, item := range batch {
+				results = append(results, ImportResult{
+					Name:    item.song.Name,
+					Success: false,
+					Error:   "生成 URL 映射失败: " + err.Error(),
+				})
+				failedCount++
+			}
+			batch = nil // 清空 batch，跳过后续步骤
+		} else {
+			for i := range batch {
+				batch[i].hash = hashes[i]
+				batch[i].musicUrl = "/api/v1/plugin/lxmusic/api/music/url/" + hashes[i]
+			}
+		}
 	}
 
 	// 第二步：如果有成功生成 hash 的条目，一次批量调用主程序 API

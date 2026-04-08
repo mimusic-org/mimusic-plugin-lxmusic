@@ -39,6 +39,13 @@ func NewStore(dataDir string) (*Store, error) {
 	return s, nil
 }
 
+// PutBatchItem 批量写入的单条输入
+type PutBatchItem struct {
+	SongInfo map[string]interface{}
+	Quality  string
+	Platform string
+}
+
 // Put 存入映射，返回 hash 值
 // hash 生成规则：将 songInfo + quality 序列化为 JSON（key 排序），取 SHA256 前 16 位 hex
 func (s *Store) Put(songInfo map[string]interface{}, quality, platform string) (string, error) {
@@ -58,6 +65,38 @@ func (s *Store) Put(songInfo map[string]interface{}, quality, platform string) (
 	}
 
 	return hash, nil
+}
+
+// PutBatch 批量存入映射，所有条目写入内存后只执行一次持久化。
+// 返回与输入顺序一致的 hash 列表。如果持久化失败，所有条目会被回滚。
+func (s *Store) PutBatch(items []PutBatchItem) ([]string, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+
+	now := time.Now().Format(time.RFC3339)
+	hashes := make([]string, 0, len(items))
+
+	for _, item := range items {
+		hash := s.generateHash(item.SongInfo, item.Quality)
+		s.mappings[hash] = &MusicUrlMapping{
+			SongInfo:  item.SongInfo,
+			Quality:   item.Quality,
+			Platform:  item.Platform,
+			CreatedAt: now,
+		}
+		hashes = append(hashes, hash)
+	}
+
+	if err := s.save(); err != nil {
+		// 回滚：移除本批次写入的所有条目
+		for _, hash := range hashes {
+			delete(s.mappings, hash)
+		}
+		return nil, fmt.Errorf("save urlmap batch: %w", err)
+	}
+
+	return hashes, nil
 }
 
 // Get 根据 hash 获取映射
