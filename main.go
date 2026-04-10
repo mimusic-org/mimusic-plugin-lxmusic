@@ -34,10 +34,11 @@ type Plugin struct {
 	staticHandler  *plugin.StaticHandler
 	sourceManager  *source.Manager
 	sourceHandler  *handlers.SourceHandler
-	searchHandler  *handlers.SearchHandler
-	runtimeManager *engine.RuntimeManager
-	registry       *musicsdk.Registry
-	urlmapStore    *urlmap.Store
+	searchHandler   *handlers.SearchHandler
+	songlistHandler *handlers.SongListHandler
+	runtimeManager  *engine.RuntimeManager
+	registry        *musicsdk.Registry
+	urlmapStore     *urlmap.Store
 }
 
 func init() {
@@ -97,6 +98,14 @@ func (p *Plugin) Init(ctx context.Context, request *pbplugin.InitRequest) (*empt
 	p.registry.RegisterLyricFetcher(musicsdk.NewMgLyricFetcher())
 	slog.Info("已注册内置平台歌词获取器", "count", 5)
 
+	// 注册 5 个平台歌单提供者
+	p.registry.RegisterSongListProvider(musicsdk.NewKgSongListProvider())
+	p.registry.RegisterSongListProvider(musicsdk.NewKwSongListProvider())
+	p.registry.RegisterSongListProvider(musicsdk.NewTxSongListProvider())
+	p.registry.RegisterSongListProvider(musicsdk.NewWySongListProvider())
+	p.registry.RegisterSongListProvider(musicsdk.NewMgSongListProvider())
+	slog.Info("已注册内置平台歌单提供者", "count", 5)
+
 	// 5. 初始化 urlmap.Store
 	p.urlmapStore, err = urlmap.NewStore(dataDir)
 	if err != nil {
@@ -120,6 +129,7 @@ func (p *Plugin) Init(ctx context.Context, request *pbplugin.InitRequest) (*empt
 	// 7. 初始化处理器
 	p.sourceHandler = handlers.NewSourceHandler(p.sourceManager, p.runtimeManager, p.pluginID)
 	p.searchHandler = handlers.NewSearchHandler(p.registry, p.runtimeManager, p.urlmapStore)
+	p.songlistHandler = handlers.NewSongListHandler(p.registry)
 
 	// 8. 获取路由管理器
 	routerManager := plugin.GetRouterManager()
@@ -145,6 +155,13 @@ func (p *Plugin) Init(ctx context.Context, request *pbplugin.InitRequest) (*empt
 
 	// 获取歌词（不需要认证，延迟加载时主程序直接调用）
 	routerManager.RegisterRouter(ctx, "GET", "/lxmusic/api/lyric/url/{hash}", p.searchHandler.HandleGetLyric, false)
+
+	// 歌单（需要认证）
+	routerManager.RegisterRouter(ctx, "GET", "/lxmusic/api/songlist/tags", p.songlistHandler.HandleGetTags, true)
+	routerManager.RegisterRouter(ctx, "GET", "/lxmusic/api/songlist/list", p.songlistHandler.HandleGetList, true)
+	routerManager.RegisterRouter(ctx, "GET", "/lxmusic/api/songlist/detail", p.songlistHandler.HandleGetDetail, true)
+	routerManager.RegisterRouter(ctx, "GET", "/lxmusic/api/songlist/search", p.songlistHandler.HandleSearch, true)
+	routerManager.RegisterRouter(ctx, "GET", "/lxmusic/api/songlist/sorts", p.songlistHandler.HandleGetSorts, true)
 
 	slog.Info("洛雪音源插件路由注册完成")
 	return &emptypb.Empty{}, nil

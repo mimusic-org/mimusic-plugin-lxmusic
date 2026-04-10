@@ -583,4 +583,661 @@ document.addEventListener('DOMContentLoaded', function () {
     document.getElementById('dialogOverlay').addEventListener('click', function (e) {
         if (e.target === this) hideDialog();
     });
+
+    // 初始化歌单 Tab
+    initSonglistTab();
 });
+
+// ============ 歌单 Tab ============
+
+// 歌单状态
+let slCurrentPlatform = 'kg';
+let slCurrentMode = 'recommend';
+let slCurrentSortId = '';
+let slCurrentTagId = '';
+let slSortList = [];
+let slTags = null;
+let slSongLists = [];
+let slCurrentPage = 1;
+let slTotalResults = 0;
+let slDetailSongs = [];
+let slDetailInfo = null;
+let slDetailPage = 1;
+let slDetailTotal = 0;
+let slSelectedSongs = new Map();
+let slTagsLoaded = false;
+
+function initSonglistTab() {
+    // 模式切换
+    document.querySelectorAll('.segment-btn').forEach(btn => {
+        btn.addEventListener('click', function () {
+            const mode = this.dataset.mode;
+            switchSonglistMode(mode);
+        });
+    });
+
+    // 平台切换
+    document.getElementById('slPlatformSelect').addEventListener('change', function () {
+        slCurrentPlatform = this.value;
+        slTagsLoaded = false;
+        slCurrentSortId = '';
+        slCurrentTagId = '';
+        if (slCurrentMode === 'recommend') {
+            loadSonglistTagsAndList();
+        }
+    });
+
+    // 搜索按钮
+    document.getElementById('slActionBtn').addEventListener('click', slDoAction);
+
+    // 搜索输入框回车
+    document.getElementById('slSearchInput').addEventListener('keypress', function (e) {
+        if (e.key === 'Enter') slDoAction();
+    });
+    document.getElementById('slParseInput').addEventListener('keypress', function (e) {
+        if (e.key === 'Enter') slDoAction();
+    });
+
+    // 全选
+    document.getElementById('slSelectAll').addEventListener('change', slToggleSelectAll);
+
+    // 导入
+    document.getElementById('slImportBtn').addEventListener('click', slImportSelectedSongs);
+
+    // 歌单选择变化
+    document.getElementById('slPlaylistSelect').addEventListener('change', function () {
+        const wrapper = document.getElementById('slNewPlaylistWrapper');
+        wrapper.style.display = this.value === '__new__' ? 'flex' : 'none';
+    });
+}
+
+function switchSonglistMode(mode) {
+    slCurrentMode = mode;
+    document.querySelectorAll('.segment-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+
+    const searchWrapper = document.getElementById('slSearchWrapper');
+    const parseWrapper = document.getElementById('slParseWrapper');
+    const actionBtn = document.getElementById('slActionBtn');
+    const tagCard = document.getElementById('slTagCard');
+
+    searchWrapper.style.display = 'none';
+    parseWrapper.style.display = 'none';
+    actionBtn.style.display = 'none';
+    tagCard.style.display = 'none';
+
+    // 切换模式时隐藏详情，显示列表
+    document.getElementById('slDetailCard').style.display = 'none';
+
+    if (mode === 'recommend') {
+        if (slTagsLoaded) {
+            tagCard.style.display = '';
+        }
+        loadSonglistTagsAndList();
+    } else if (mode === 'search') {
+        searchWrapper.style.display = '';
+        actionBtn.style.display = '';
+        actionBtn.textContent = '搜索';
+        document.getElementById('slListCard').style.display = 'none';
+    } else if (mode === 'parse') {
+        parseWrapper.style.display = '';
+        actionBtn.style.display = '';
+        actionBtn.textContent = '解析';
+        document.getElementById('slListCard').style.display = 'none';
+    }
+}
+
+function slDoAction() {
+    if (slCurrentMode === 'search') {
+        const keyword = document.getElementById('slSearchInput').value.trim();
+        if (!keyword) { showSnackbar('请输入搜索关键词', 'warning'); return; }
+        slSearchSonglist(keyword, 1);
+    } else if (slCurrentMode === 'parse') {
+        const link = document.getElementById('slParseInput').value.trim();
+        if (!link) { showSnackbar('请输入歌单链接', 'warning'); return; }
+        slParseSonglistLink(link);
+    }
+}
+
+// 加载标签和列表
+async function loadSonglistTagsAndList() {
+    if (!slTagsLoaded) {
+        await Promise.all([slLoadTags(), slLoadSorts()]);
+        slTagsLoaded = true;
+    }
+    slLoadList(1);
+}
+
+async function slLoadTags() {
+    try {
+        const resp = await fetch(`${API_BASE}/songlist/tags?source_id=${slCurrentPlatform}`, { headers: getAuthHeaders() });
+        const result = await resp.json();
+        if (result.code === 0) {
+            slTags = result.data;
+            slRenderTagChips();
+            document.getElementById('slTagCard').style.display = '';
+        }
+    } catch (e) {
+        console.error('加载标签失败:', e);
+    }
+}
+
+async function slLoadSorts() {
+    try {
+        const resp = await fetch(`${API_BASE}/songlist/sorts?source_id=${slCurrentPlatform}`, { headers: getAuthHeaders() });
+        const result = await resp.json();
+        if (result.code === 0) {
+            slSortList = result.data || [];
+            if (slSortList.length > 0) slCurrentSortId = slSortList[0].id;
+            slRenderSortChips();
+        }
+    } catch (e) {
+        console.error('加载排序失败:', e);
+    }
+}
+
+function slRenderSortChips() {
+    const container = document.getElementById('slSortChips');
+    if (!slSortList || slSortList.length === 0) {
+        container.innerHTML = '';
+        return;
+    }
+    container.innerHTML = slSortList.map(s =>
+        `<button class="tag-chip${s.id === slCurrentSortId ? ' active' : ''}" data-sort-id="${escapeHtml(s.id)}">${escapeHtml(s.name)}</button>`
+    ).join('');
+    container.querySelectorAll('.tag-chip').forEach(chip => {
+        chip.addEventListener('click', function () {
+            slCurrentSortId = this.dataset.sortId;
+            slRenderSortChips();
+            slLoadList(1);
+        });
+    });
+}
+
+function slRenderTagChips() {
+    const container = document.getElementById('slTagChips');
+    if (!slTags) { container.innerHTML = ''; return; }
+
+    let html = '';
+
+    // 热门标签
+    if (slTags.hot && slTags.hot.length > 0) {
+        html += '<div class="tag-group-title">热门</div><div class="tag-group-chips">';
+        html += `<button class="tag-chip${slCurrentTagId === '' ? ' active' : ''}" data-tag-id="">全部</button>`;
+        html += slTags.hot.map(t =>
+            `<button class="tag-chip${t.id === slCurrentTagId ? ' active' : ''}" data-tag-id="${escapeHtml(t.id)}">${escapeHtml(t.name)}</button>`
+        ).join('');
+        html += '</div>';
+    }
+
+    // 分组标签
+    if (slTags.tags && slTags.tags.length > 0) {
+        slTags.tags.forEach(group => {
+            if (!group.list || group.list.length === 0) return;
+            html += `<div class="tag-group-title">${escapeHtml(group.name)}</div><div class="tag-group-chips">`;
+            html += group.list.map(t =>
+                `<button class="tag-chip${t.id === slCurrentTagId ? ' active' : ''}" data-tag-id="${escapeHtml(t.id)}">${escapeHtml(t.name)}</button>`
+            ).join('');
+            html += '</div>';
+        });
+    }
+
+    container.innerHTML = html;
+    container.querySelectorAll('.tag-chip').forEach(chip => {
+        chip.addEventListener('click', function () {
+            slCurrentTagId = this.dataset.tagId;
+            slRenderTagChips();
+            slLoadList(1);
+        });
+    });
+}
+
+async function slLoadList(page) {
+    slCurrentPage = page;
+    const listCard = document.getElementById('slListCard');
+    const grid = document.getElementById('slGrid');
+    listCard.style.display = '';
+    grid.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">hourglass_empty</span><p>加载中...</p></div>';
+
+    try {
+        const params = new URLSearchParams({
+            source_id: slCurrentPlatform,
+            sort_id: slCurrentSortId,
+            tag_id: slCurrentTagId,
+            page: page
+        });
+        const resp = await fetch(`${API_BASE}/songlist/list?${params}`, { headers: getAuthHeaders() });
+        const result = await resp.json();
+        if (result.code === 0) {
+            slSongLists = result.data.list || [];
+            slTotalResults = result.data.total || 0;
+            slRenderGrid();
+        } else {
+            grid.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">error</span><p>加载失败</p></div>';
+        }
+    } catch (e) {
+        grid.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">error</span><p>加载失败: ' + escapeHtml(e.message) + '</p></div>';
+    }
+}
+
+async function slSearchSonglist(keyword, page) {
+    slCurrentPage = page;
+    const listCard = document.getElementById('slListCard');
+    const grid = document.getElementById('slGrid');
+    listCard.style.display = '';
+    grid.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">hourglass_empty</span><p>搜索中...</p></div>';
+
+    const actionBtn = document.getElementById('slActionBtn');
+    actionBtn.disabled = true;
+    actionBtn.innerHTML = '<span class="spinner"></span>';
+
+    try {
+        const params = new URLSearchParams({ source_id: slCurrentPlatform, keyword, page });
+        const resp = await fetch(`${API_BASE}/songlist/search?${params}`, { headers: getAuthHeaders() });
+        const result = await resp.json();
+        if (result.code === 0) {
+            slSongLists = result.data.list || [];
+            slTotalResults = result.data.total || 0;
+            slRenderGrid();
+            document.getElementById('slListCount').textContent = `共 ${slTotalResults} 条`;
+        } else {
+            grid.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">search_off</span><p>搜索失败</p></div>';
+        }
+    } catch (e) {
+        grid.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">error</span><p>搜索失败: ' + escapeHtml(e.message) + '</p></div>';
+    } finally {
+        actionBtn.disabled = false;
+        actionBtn.textContent = '搜索';
+    }
+}
+
+async function slParseSonglistLink(link) {
+    const actionBtn = document.getElementById('slActionBtn');
+    actionBtn.disabled = true;
+    actionBtn.innerHTML = '<span class="spinner"></span>';
+
+    try {
+        const params = new URLSearchParams({ source_id: slCurrentPlatform, id: link, page: 1 });
+        const resp = await fetch(`${API_BASE}/songlist/detail?${params}`, { headers: getAuthHeaders() });
+        const result = await resp.json();
+        if (result.code === 0) {
+            slDetailSongs = result.data.list || [];
+            slDetailInfo = result.data.info || {};
+            slDetailPage = 1;
+            slDetailTotal = result.data.total || 0;
+            slShowDetail();
+        } else {
+            showSnackbar('解析失败: ' + (result.msg || '未知错误'), 'error');
+        }
+    } catch (e) {
+        showSnackbar('解析失败: ' + e.message, 'error');
+    } finally {
+        actionBtn.disabled = false;
+        actionBtn.textContent = '解析';
+    }
+}
+
+function slRenderGrid() {
+    const grid = document.getElementById('slGrid');
+    const countEl = document.getElementById('slListCount');
+
+    if (slSongLists.length === 0) {
+        grid.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">queue_music</span><p>暂无歌单</p></div>';
+        countEl.textContent = '';
+        document.getElementById('slPagination').innerHTML = '';
+        return;
+    }
+
+    countEl.textContent = slTotalResults > 0 ? `共 ${slTotalResults} 条` : '';
+
+    grid.innerHTML = slSongLists.map((item, i) => {
+        const img = item.img
+            ? `<img class="songlist-cover" src="${escapeHtml(item.img)}" alt="" loading="lazy" onerror="this.style.display='none'">`
+            : '<div class="songlist-cover" style="display:flex;align-items:center;justify-content:center"><span class="material-symbols-outlined" style="font-size:40px;color:var(--md-outline)">queue_music</span></div>';
+        return `
+            <div class="songlist-card" data-index="${i}" onclick="slOpenDetail('${escapeHtml(item.id)}')">
+                ${img}
+                <div class="songlist-card-body">
+                    <div class="songlist-name">${escapeHtml(item.name)}</div>
+                    <div class="songlist-meta">
+                        ${item.play_count || item.playCount ? `<span class="songlist-play-count"><span class="material-symbols-outlined">play_arrow</span>${escapeHtml(item.play_count || item.playCount)}</span>` : ''}
+                        ${item.author ? `<span>${escapeHtml(item.author)}</span>` : ''}
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    slRenderListPagination();
+}
+
+function slRenderListPagination() {
+    const container = document.getElementById('slPagination');
+    const limit = 30;
+    const totalPages = Math.max(1, Math.ceil(slTotalResults / limit));
+    if (totalPages <= 1) { container.innerHTML = ''; return; }
+
+    const prevDisabled = slCurrentPage <= 1 ? 'disabled' : '';
+    const nextDisabled = slCurrentPage >= totalPages ? 'disabled' : '';
+
+    container.innerHTML = `
+        <button class="btn-icon" title="上一页" ${prevDisabled} onclick="slPageNav(${slCurrentPage - 1})">
+            <span class="material-symbols-outlined">chevron_left</span>
+        </button>
+        <span class="page-info">第 ${slCurrentPage} / ${totalPages} 页</span>
+        <button class="btn-icon" title="下一页" ${nextDisabled} onclick="slPageNav(${slCurrentPage + 1})">
+            <span class="material-symbols-outlined">chevron_right</span>
+        </button>
+    `;
+}
+
+function slPageNav(page) {
+    if (slCurrentMode === 'search') {
+        const keyword = document.getElementById('slSearchInput').value.trim();
+        slSearchSonglist(keyword, page);
+    } else {
+        slLoadList(page);
+    }
+}
+
+async function slOpenDetail(id) {
+    const detailCard = document.getElementById('slDetailCard');
+    const listCard = document.getElementById('slListCard');
+    const tagCard = document.getElementById('slTagCard');
+    const detailList = document.getElementById('slDetailList');
+
+    detailList.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">hourglass_empty</span><p>加载中...</p></div>';
+    detailCard.style.display = '';
+    listCard.style.display = 'none';
+    tagCard.style.display = 'none';
+
+    slSelectedSongs.clear();
+    slUpdateSelectedCount();
+
+    try {
+        const params = new URLSearchParams({ source_id: slCurrentPlatform, id, page: 1 });
+        const resp = await fetch(`${API_BASE}/songlist/detail?${params}`, { headers: getAuthHeaders() });
+        const result = await resp.json();
+        if (result.code === 0) {
+            slDetailSongs = result.data.list || [];
+            slDetailInfo = result.data.info || {};
+            slDetailPage = 1;
+            slDetailTotal = result.data.total || 0;
+            slCurrentDetailId = id;
+            slShowDetail();
+        } else {
+            detailList.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">error</span><p>加载失败</p></div>';
+        }
+    } catch (e) {
+        detailList.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">error</span><p>加载失败: ' + escapeHtml(e.message) + '</p></div>';
+    }
+}
+
+let slCurrentDetailId = '';
+
+function slShowDetail() {
+    const detailCard = document.getElementById('slDetailCard');
+    const listCard = document.getElementById('slListCard');
+    const tagCard = document.getElementById('slTagCard');
+
+    detailCard.style.display = '';
+    listCard.style.display = 'none';
+    tagCard.style.display = 'none';
+
+    // 渲染歌单信息
+    const infoEl = document.getElementById('slDetailInfo');
+    if (slDetailInfo && (slDetailInfo.name || slDetailInfo.img)) {
+        const img = slDetailInfo.img
+            ? `<img class="songlist-info-cover" src="${escapeHtml(slDetailInfo.img)}" alt="" onerror="this.style.display='none'">`
+            : '';
+        infoEl.innerHTML = `
+            ${img}
+            <div class="songlist-info-detail">
+                <div class="songlist-info-name">${escapeHtml(slDetailInfo.name || '')}</div>
+                <div class="songlist-info-author">
+                    ${slDetailInfo.author ? escapeHtml(slDetailInfo.author) : ''}
+                    ${slDetailInfo.play_count || slDetailInfo.playCount ? ' · ' + escapeHtml(slDetailInfo.play_count || slDetailInfo.playCount) + ' 播放' : ''}
+                </div>
+                ${slDetailInfo.desc ? `<div class="songlist-info-desc" onclick="this.classList.toggle('expanded')">${escapeHtml(slDetailInfo.desc)}</div>` : ''}
+            </div>
+        `;
+    } else {
+        infoEl.innerHTML = '';
+    }
+
+    // 渲染歌曲列表
+    slRenderDetailList();
+
+    // 渲染歌单选择（复用主页的歌单数据）
+    const select = document.getElementById('slPlaylistSelect');
+    let html = '<option value="">不添加到歌单</option>';
+    if (Array.isArray(playlists)) {
+        for (const pl of playlists) {
+            html += `<option value="${pl.id}">${escapeHtml(pl.name)}</option>`;
+        }
+    }
+    html += '<option value="__new__">+ 新建歌单...</option>';
+    select.innerHTML = html;
+}
+
+function slRenderDetailList() {
+    const container = document.getElementById('slDetailList');
+
+    if (slDetailSongs.length === 0) {
+        container.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">music_off</span><p>暂无歌曲</p></div>';
+        document.getElementById('slDetailPagination').innerHTML = '';
+        return;
+    }
+
+    container.innerHTML = slDetailSongs.map((song, i) => {
+        const key = getSongKey(song);
+        const checked = slSelectedSongs.has(key) ? 'checked' : '';
+        const selectedClass = slSelectedSongs.has(key) ? ' selected' : '';
+        const imgHtml = song.img
+            ? `<img src="${escapeHtml(song.img)}" alt="" loading="lazy" onerror="this.parentNode.innerHTML='<span class=\\'material-symbols-outlined\\'>music_note</span>'">`
+            : '<span class="material-symbols-outlined">music_note</span>';
+        return `
+            <div class="result-item${selectedClass}" data-index="${i}">
+                <input type="checkbox" class="sl-detail-checkbox" data-index="${i}" ${checked}
+                    onchange="slOnSongCheckChanged(${i}, this.checked)" style="accent-color:var(--md-primary);width:18px;height:18px;cursor:pointer;flex-shrink:0">
+                <div class="result-thumb">${imgHtml}</div>
+                <div class="result-info">
+                    <div class="result-name">${escapeHtml(song.name)}</div>
+                    <div class="result-meta">${escapeHtml(song.singer || '')}${song.album ? ' — ' + escapeHtml(song.album) : ''}</div>
+                </div>
+                <div class="result-duration">${formatDuration(song.duration)}</div>
+            </div>
+        `;
+    }).join('');
+
+    // 同步全选状态
+    const allChecked = slDetailSongs.every(s => slSelectedSongs.has(getSongKey(s)));
+    document.getElementById('slSelectAll').checked = allChecked && slDetailSongs.length > 0;
+
+    slRenderDetailPagination();
+}
+
+function slOnSongCheckChanged(index, checked) {
+    const song = slDetailSongs[index];
+    const key = getSongKey(song);
+    if (checked) slSelectedSongs.set(key, song);
+    else slSelectedSongs.delete(key);
+    const row = document.querySelectorAll('#slDetailList .result-item')[index];
+    if (row) row.classList.toggle('selected', checked);
+    slUpdateSelectedCount();
+    const allChecked = slDetailSongs.every(s => slSelectedSongs.has(getSongKey(s)));
+    document.getElementById('slSelectAll').checked = allChecked;
+}
+
+function slToggleSelectAll() {
+    const checked = document.getElementById('slSelectAll').checked;
+    slDetailSongs.forEach(song => {
+        const key = getSongKey(song);
+        if (checked) slSelectedSongs.set(key, song);
+        else slSelectedSongs.delete(key);
+    });
+    slRenderDetailList();
+    slUpdateSelectedCount();
+}
+
+function slUpdateSelectedCount() {
+    const count = slSelectedSongs.size;
+    const badge = document.getElementById('slSelectedBadge');
+    if (badge) badge.textContent = count;
+    document.getElementById('slImportBtn').disabled = count === 0;
+}
+
+function slRenderDetailPagination() {
+    const container = document.getElementById('slDetailPagination');
+    const limit = 50;
+    const totalPages = Math.max(1, Math.ceil(slDetailTotal / limit));
+    if (totalPages <= 1) { container.innerHTML = ''; return; }
+
+    const prevDisabled = slDetailPage <= 1 ? 'disabled' : '';
+    const nextDisabled = slDetailPage >= totalPages ? 'disabled' : '';
+
+    container.innerHTML = `
+        <button class="btn-icon" title="上一页" ${prevDisabled} onclick="slDetailPageNav(${slDetailPage - 1})">
+            <span class="material-symbols-outlined">chevron_left</span>
+        </button>
+        <span class="page-info">第 ${slDetailPage} / ${totalPages} 页</span>
+        <button class="btn-icon" title="下一页" ${nextDisabled} onclick="slDetailPageNav(${slDetailPage + 1})">
+            <span class="material-symbols-outlined">chevron_right</span>
+        </button>
+    `;
+}
+
+async function slDetailPageNav(page) {
+    if (!slCurrentDetailId) return;
+    slDetailPage = page;
+    const detailList = document.getElementById('slDetailList');
+    detailList.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">hourglass_empty</span><p>加载中...</p></div>';
+
+    try {
+        const params = new URLSearchParams({ source_id: slCurrentPlatform, id: slCurrentDetailId, page });
+        const resp = await fetch(`${API_BASE}/songlist/detail?${params}`, { headers: getAuthHeaders() });
+        const result = await resp.json();
+        if (result.code === 0) {
+            slDetailSongs = result.data.list || [];
+            slDetailTotal = result.data.total || 0;
+            slRenderDetailList();
+        } else {
+            detailList.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">error</span><p>加载失败</p></div>';
+        }
+    } catch (e) {
+        detailList.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">error</span><p>加载失败</p></div>';
+    }
+}
+
+let slTagCardCollapsed = false;
+
+function slToggleTagCard() {
+    slTagCardCollapsed = !slTagCardCollapsed;
+    const body = document.getElementById('slTagCardBody');
+    const icon = document.querySelector('#slTagToggleBtn .material-symbols-outlined');
+    if (slTagCardCollapsed) {
+        body.style.display = 'none';
+        icon.textContent = 'expand_more';
+    } else {
+        body.style.display = '';
+        icon.textContent = 'expand_less';
+    }
+}
+
+function slBackToList() {
+    document.getElementById('slDetailCard').style.display = 'none';
+    if (slCurrentMode === 'recommend') {
+        document.getElementById('slListCard').style.display = '';
+        document.getElementById('slTagCard').style.display = '';
+    } else if (slCurrentMode === 'search') {
+        document.getElementById('slListCard').style.display = '';
+    }
+    // parse 模式返回时不显示列表
+}
+
+async function slImportSelectedSongs() {
+    const songs = Array.from(slSelectedSongs.values());
+    if (songs.length === 0) { showSnackbar('请选择要导入的歌曲', 'warning'); return; }
+
+    const quality = document.getElementById('slQualitySelect').value;
+    const playlistSelect = document.getElementById('slPlaylistSelect');
+    let playlistId = 0;
+    let newPlaylistName = '';
+
+    if (playlistSelect.value === '__new__') {
+        newPlaylistName = document.getElementById('slNewPlaylistName').value.trim();
+        if (!newPlaylistName) { showSnackbar('请输入歌单名称', 'error'); return; }
+    } else if (playlistSelect.value) {
+        playlistId = parseInt(playlistSelect.value);
+    }
+
+    const progressSection = document.getElementById('slImportProgress');
+    const progressFill = document.getElementById('slProgressFill');
+    const progressText = document.getElementById('slProgressText');
+    const importResultsEl = document.getElementById('slImportResults');
+
+    progressSection.style.display = '';
+    progressFill.style.width = '0%';
+    progressText.textContent = '正在导入...';
+    importResultsEl.innerHTML = '';
+
+    const importBtn = document.getElementById('slImportBtn');
+    importBtn.disabled = true;
+    importBtn.innerHTML = '<span class="spinner"></span>导入中...';
+
+    const requestBody = {
+        songs: songs.map(song => ({
+            name: song.name,
+            singer: song.singer,
+            album: song.album,
+            source: song.source,
+            musicId: song.musicId || song.music_id,
+            img: song.img,
+            hash: song.hash,
+            songmid: song.songmid,
+            strMediaMid: song.strMediaMid,
+            albumMid: song.albumMid,
+            copyrightId: song.copyrightId,
+            albumId: song.albumId,
+            duration: song.duration,
+            types: song.types
+        })),
+        quality,
+        playlist_id: playlistId,
+        new_playlist_name: newPlaylistName
+    };
+
+    try {
+        const response = await fetch(`${API_BASE}/songs/import`, {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify(requestBody)
+        });
+        const result = await response.json();
+        if (result.code === 0) {
+            const data = result.data;
+            progressFill.style.width = '100%';
+            progressText.textContent = `导入完成：成功 ${data.success} 首，失败 ${data.failed} 首`;
+            importResultsEl.innerHTML = (data.results || []).map(item =>
+                item.success
+                    ? `<div class="import-result-item success">✓ ${escapeHtml(item.name)}</div>`
+                    : `<div class="import-result-item error">✗ ${escapeHtml(item.name)}: ${escapeHtml(item.error)}</div>`
+            ).join('');
+            if (data.success > 0) {
+                showSnackbar(`成功导入 ${data.success} 首歌曲`, 'success');
+                slSelectedSongs.clear();
+                slUpdateSelectedCount();
+                loadPlaylists();
+            }
+            if (data.failed > 0) showSnackbar(`${data.failed} 首歌曲导入失败`, 'error');
+        } else {
+            progressText.textContent = '导入失败: ' + (result.msg || '未知错误');
+            showSnackbar('导入失败: ' + (result.msg || '未知错误'), 'error');
+        }
+    } catch (e) {
+        progressText.textContent = '导入失败: ' + e.message;
+        showSnackbar('导入失败: ' + e.message, 'error');
+    } finally {
+        importBtn.disabled = slSelectedSongs.size === 0;
+        importBtn.innerHTML = `导入选中 <span id="slSelectedBadge" class="badge">${slSelectedSongs.size}</span>`;
+    }
+}

@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/knqyf263/go-plugin v0.9.0
-	github.com/mimusic-org/musicsdk v0.0.0-20260403135417-e6d6f705cf27
+	github.com/mimusic-org/musicsdk v0.0.0-20260410084111-21190835706f
 	github.com/mimusic-org/plugin v0.1.2
 	github.com/mimusic-org/plugin/pkg/go-plugin-http v0.0.0-20260406130938-919755239121
 )

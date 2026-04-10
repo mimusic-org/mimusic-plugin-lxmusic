@@ -56,7 +56,8 @@ mimusic-plugin-lxmusic/
 │   └── types.go            # 音源数据类型 (含 Enabled 字段)
 ├── handlers/
 │   ├── search.go           # 搜索、导入、播放 URL 处理器
-│   └── source.go            # 音源管理处理器
+│   ├── songlist.go         # 歌单处理器（标签、列表、详情、搜索）
+│   └── source.go           # 音源管理处理器
 ├── static/
 │   ├── index.html          # 插件页面
 │   ├── css/style.css       # 样式
@@ -80,6 +81,17 @@ mimusic-plugin-lxmusic/
 | `GET` | `/lxmusic/api/search?keyword=xxx&source_id=xx&page=1` | 是 | 搜索歌曲（source_id 通过 platforms 接口获取） |
 | `POST` | `/lxmusic/api/songs/import` | 是 | 批量导入歌曲到音乐库 |
 | `GET` | `/lxmusic/api/music/url/{hash}` | 否 | 获取播放音频（优先返回缓存流，失败回退 302 重定向） |
+| `GET` | `/lxmusic/api/lyric/url/{hash}` | 否 | 获取歌词（延迟加载 + 缓存写回） |
+
+### 歌单
+
+| 方法 | 路径 | 认证 | 描述 |
+|------|------|------|------|
+| `GET` | `/lxmusic/api/songlist/tags?source_id=xx` | 是 | 获取指定平台的歌单标签 |
+| `GET` | `/lxmusic/api/songlist/list?source_id=xx&sort_id=xx&tag_id=xx&page=1` | 是 | 获取歌单列表（推荐/按标签） |
+| `GET` | `/lxmusic/api/songlist/detail?source_id=xx&id=xxx&page=1` | 是 | 获取歌单详情（歌曲列表） |
+| `GET` | `/lxmusic/api/songlist/search?source_id=xx&keyword=xxx&page=1` | 是 | 搜索歌单 |
+| `GET` | `/lxmusic/api/songlist/sorts?source_id=xx` | 是 | 获取排序选项 |
 
 ### 音源管理
 

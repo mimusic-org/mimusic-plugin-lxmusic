@@ -106,6 +106,111 @@
         </div>
     </div>
 
+    <!-- Tab 3: 歌单 -->
+    <div class="tab-content" id="tab-songlist">
+        <div class="container">
+
+            <!-- 歌单操作卡片 -->
+            <div class="card">
+                <div class="card-header">歌单</div>
+                <div class="search-row">
+                    <select id="slPlatformSelect" class="select-field" style="width:150px;flex-shrink:0">
+                        <option value="kg">kg</option>
+                        <option value="kw">kw</option>
+                        <option value="tx">tx</option>
+                        <option value="wy">wy</option>
+                        <option value="mg">mg</option>
+                    </select>
+                    <div class="segment-group">
+                        <button class="segment-btn active" data-mode="recommend">推荐</button>
+                        <button class="segment-btn" data-mode="search">搜索</button>
+                        <button class="segment-btn" data-mode="parse">解析</button>
+                    </div>
+                    <div id="slSearchWrapper" class="text-field-wrapper" style="flex:1;display:none">
+                        <span class="material-symbols-outlined">search</span>
+                        <input type="text" id="slSearchInput" class="text-field" placeholder="输入歌单关键词...">
+                    </div>
+                    <div id="slParseWrapper" class="text-field-wrapper" style="flex:1;display:none">
+                        <span class="material-symbols-outlined">link</span>
+                        <input type="text" id="slParseInput" class="text-field" placeholder="粘贴歌单链接...">
+                    </div>
+                    <button id="slActionBtn" class="btn-filled" style="display:none">搜索</button>
+                </div>
+            </div>
+
+            <!-- 标签筛选卡片 -->
+            <div class="card" id="slTagCard" style="display:none">
+                <div class="card-header">
+                    分类标签
+                    <button class="btn-icon" id="slTagToggleBtn" onclick="slToggleTagCard()" title="折叠/展开">
+                        <span class="material-symbols-outlined">expand_less</span>
+                    </button>
+                </div>
+                <div id="slTagCardBody">
+                    <div id="slSortChips" class="tag-chips"></div>
+                    <div id="slTagChips" class="tag-chips-container"></div>
+                </div>
+            </div>
+
+            <!-- 歌单列表卡片 -->
+            <div class="card" id="slListCard" style="display:none">
+                <div class="card-header">
+                    歌单列表
+                    <span id="slListCount" class="chip"></span>
+                </div>
+                <div id="slGrid" class="songlist-grid"></div>
+                <div class="pagination" id="slPagination"></div>
+            </div>
+
+            <!-- 歌单详情卡片 -->
+            <div class="card" id="slDetailCard" style="display:none">
+                <div class="card-header">
+                    <button class="btn-icon" onclick="slBackToList()" title="返回">
+                        <span class="material-symbols-outlined">arrow_back</span>
+                    </button>
+                    歌单详情
+                </div>
+                <div id="slDetailInfo" class="songlist-info"></div>
+                <!-- 操作工具栏 -->
+                <div class="toolbar">
+                    <select id="slQualitySelect" class="select-field select-small">
+                        <option value="128k">128k</option>
+                        <option value="320k" selected>320k</option>
+                        <option value="flac">FLAC</option>
+                    </select>
+                    <select id="slPlaylistSelect" class="select-field select-small">
+                        <option value="">不添加到歌单</option>
+                        <option value="__new__">+ 新建歌单...</option>
+                    </select>
+                    <div id="slNewPlaylistWrapper" style="display:none;flex:1;min-width:160px">
+                        <input type="text" id="slNewPlaylistName" class="text-field" placeholder="歌单名称">
+                    </div>
+                    <label class="md-checkbox">
+                        <input type="checkbox" id="slSelectAll">
+                        <span>全选当前页</span>
+                    </label>
+                    <button id="slImportBtn" class="btn-filled" disabled>
+                        导入选中
+                        <span id="slSelectedBadge" class="badge">0</span>
+                    </button>
+                </div>
+                <div id="slDetailList" class="result-list"></div>
+                <div class="pagination" id="slDetailPagination"></div>
+            </div>
+
+            <!-- 导入进度卡片 -->
+            <div class="card" id="slImportProgress" style="display:none">
+                <div class="card-header">导入进度</div>
+                <div class="progress-linear">
+                    <div class="progress-linear-fill" id="slProgressFill"></div>
+                </div>
+                <div class="progress-text" id="slProgressText">准备中...</div>
+                <div id="slImportResults" class="import-results"></div>
+            </div>
+
+        </div>
+    </div>
+
     <!-- Snackbar -->
     <div id="snackbar" class="snackbar"></div>
 
@@ -114,6 +219,10 @@
         <button class="tab-item active" data-tab="search">
             <span class="material-symbols-outlined">search</span>
             歌曲搜索
+        </button>
+        <button class="tab-item" data-tab="songlist">
+            <span class="material-symbols-outlined">queue_music</span>
+            歌单
         </button>
         <button class="tab-item" data-tab="sources">
             <span class="material-symbols-outlined">library_music</span>
