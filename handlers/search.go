@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -349,6 +350,9 @@ func (h *SearchHandler) HandleImportSongs(req *http.Request) (*plugin.RouterResp
 			slog.Error("添加歌曲到歌单失败", "playlistID", playlistID, "error", err)
 		} else {
 			slog.Info("歌曲已添加到歌单", "playlistID", playlistID, "count", len(importedSongIDs))
+
+			// 如果歌单没有封面，随机选一个导入歌曲的封面设置到歌单
+			h.setPlaylistCoverIfEmpty(req, hostFunctions, playlistID, request.Songs)
 		}
 	}
 
@@ -371,6 +375,67 @@ func (h *SearchHandler) HandleImportSongs(req *http.Request) (*plugin.RouterResp
 		Headers:    map[string]string{"Content-Type": "application/json"},
 		Body:       body,
 	}, nil
+}
+
+// setPlaylistCoverIfEmpty 如果歌单没有封面，随机选一个导入歌曲的封面设置到歌单
+func (h *SearchHandler) setPlaylistCoverIfEmpty(req *http.Request, hostFunctions pbplugin.HostFunctions, playlistID int64, songs []musicsdk.SearchItem) {
+	// 收集有封面的歌曲
+	var songsWithCover []musicsdk.SearchItem
+	for _, song := range songs {
+		if song.Img != "" {
+			songsWithCover = append(songsWithCover, song)
+		}
+	}
+	if len(songsWithCover) == 0 {
+		return
+	}
+
+	// 获取歌单详情，检查是否已有封面
+	getResp, err := hostFunctions.CallRouter(req.Context(), &pbplugin.CallRouterRequest{
+		Method: "GET",
+		Path:   fmt.Sprintf("/api/v1/playlists/%d", playlistID),
+	})
+	if err != nil || !getResp.Success {
+		slog.Warn("获取歌单详情失败，跳过封面设置", "playlistID", playlistID, "error", err)
+		return
+	}
+
+	var playlist struct {
+		CoverPath string `json:"cover_path"`
+		CoverURL  string `json:"cover_url"`
+		Name      string `json:"name"`
+		Type      string `json:"type"`
+	}
+	if err := json.Unmarshal(getResp.Body, &playlist); err != nil {
+		slog.Warn("解析歌单详情失败，跳过封面设置", "playlistID", playlistID, "error", err)
+		return
+	}
+
+	// 歌单已有封面，无需设置
+	if playlist.CoverPath != "" || playlist.CoverURL != "" {
+		return
+	}
+
+	// 随机选一个有封面的歌曲
+	selectedSong := songsWithCover[rand.Intn(len(songsWithCover))]
+
+	// 更新歌单封面
+	updateBody, _ := json.Marshal(map[string]interface{}{
+		"name":      playlist.Name,
+		"type":      playlist.Type,
+		"cover_url": selectedSong.Img,
+	})
+	updateResp, err := hostFunctions.CallRouter(req.Context(), &pbplugin.CallRouterRequest{
+		Method: "PUT",
+		Path:   fmt.Sprintf("/api/v1/playlists/%d", playlistID),
+		Body:   updateBody,
+	})
+	if err != nil || !updateResp.Success {
+		slog.Warn("更新歌单封面失败", "playlistID", playlistID, "error", err)
+		return
+	}
+
+	slog.Info("已为歌单设置封面", "playlistID", playlistID, "coverURL", selectedSong.Img)
 }
 
 // fetchAndUpdateLyric 获取歌词并更新到歌曲库（失败时静默跳过）
