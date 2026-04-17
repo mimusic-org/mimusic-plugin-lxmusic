@@ -57,7 +57,6 @@ func (p *Plugin) GetPluginInfo(ctx context.Context, request *emptypb.Empty) (*pb
 			Description: "管理洛雪音源，搜索和导入网络歌曲",
 			Author:      "MiMusic Team",
 			Homepage:    "https://github.com/mimusic-org/mimusic",
-			EntryPath:   "/lxmusic",
 		},
 	}, nil
 }
@@ -66,7 +65,7 @@ func (p *Plugin) Init(ctx context.Context, request *pbplugin.InitRequest) (*empt
 	p.pluginID = request.GetPluginId()
 	slog.Info("正在初始化洛雪音源插件", "version", p.Version, "pluginID", p.pluginID)
 
-	const dataDir = "/lxmusic"
+	const dataDir = "/"
 
 	// 1. 初始化音源管理器（使用 WASM 沙箱内路径）
 	var err error
@@ -135,33 +134,33 @@ func (p *Plugin) Init(ctx context.Context, request *pbplugin.InitRequest) (*empt
 	routerManager := plugin.GetRouterManager()
 
 	// 初始化静态文件处理器
-	p.staticHandler = plugin.NewStaticHandler(staticFS, "/lxmusic", routerManager, ctx)
+	p.staticHandler = plugin.NewStaticHandler(staticFS, routerManager, ctx)
 
 	// 9. 注册 API 路由
 	// 音源管理（需要认证）
-	routerManager.RegisterRouter(ctx, "GET", "/lxmusic/api/sources", p.sourceHandler.HandleListSources, true)
-	routerManager.RegisterRouter(ctx, "POST", "/lxmusic/api/sources/import", p.sourceHandler.HandleImportSource, true)
-	routerManager.RegisterRouter(ctx, "POST", "/lxmusic/api/sources/import-url", p.sourceHandler.HandleImportSourceFromURL, true)
-	routerManager.RegisterRouter(ctx, "DELETE", "/lxmusic/api/sources", p.sourceHandler.HandleDeleteSource, true)
-	routerManager.RegisterRouter(ctx, "PUT", "/lxmusic/api/sources/toggle", p.sourceHandler.HandleToggleSource, true)
+	routerManager.RegisterRouter(ctx, "GET", "/api/sources", p.sourceHandler.HandleListSources, true)
+	routerManager.RegisterRouter(ctx, "POST", "/api/sources/import", p.sourceHandler.HandleImportSource, true)
+	routerManager.RegisterRouter(ctx, "POST", "/api/sources/import-url", p.sourceHandler.HandleImportSourceFromURL, true)
+	routerManager.RegisterRouter(ctx, "DELETE", "/api/sources", p.sourceHandler.HandleDeleteSource, true)
+	routerManager.RegisterRouter(ctx, "PUT", "/api/sources/toggle", p.sourceHandler.HandleToggleSource, true)
 
 	// 搜索和导入（需要认证）
-	routerManager.RegisterRouter(ctx, "GET", "/lxmusic/api/search", p.searchHandler.HandleSearch, true)
-	routerManager.RegisterRouter(ctx, "GET", "/lxmusic/api/platforms", p.searchHandler.HandleListPlatforms, true)
-	routerManager.RegisterRouter(ctx, "POST", "/lxmusic/api/songs/import", p.searchHandler.HandleImportSongs, true)
+	routerManager.RegisterRouter(ctx, "GET", "/api/search", p.searchHandler.HandleSearch, true)
+	routerManager.RegisterRouter(ctx, "GET", "/api/platforms", p.searchHandler.HandleListPlatforms, true)
+	routerManager.RegisterRouter(ctx, "POST", "/api/songs/import", p.searchHandler.HandleImportSongs, true)
 
 	// 获取播放 URL（不需要认证，主程序播放时直接调用）
-	routerManager.RegisterRouter(ctx, "GET", "/lxmusic/api/music/url/{hash}", p.searchHandler.HandleGetMusicUrl, false)
+	routerManager.RegisterRouter(ctx, "GET", "/api/music/url/{hash}", p.searchHandler.HandleGetMusicUrl, false)
 
 	// 获取歌词（不需要认证，延迟加载时主程序直接调用）
-	routerManager.RegisterRouter(ctx, "GET", "/lxmusic/api/lyric/url/{hash}", p.searchHandler.HandleGetLyric, false)
+	routerManager.RegisterRouter(ctx, "GET", "/api/lyric/url/{hash}", p.searchHandler.HandleGetLyric, false)
 
 	// 歌单（需要认证）
-	routerManager.RegisterRouter(ctx, "GET", "/lxmusic/api/songlist/tags", p.songlistHandler.HandleGetTags, true)
-	routerManager.RegisterRouter(ctx, "GET", "/lxmusic/api/songlist/list", p.songlistHandler.HandleGetList, true)
-	routerManager.RegisterRouter(ctx, "GET", "/lxmusic/api/songlist/detail", p.songlistHandler.HandleGetDetail, true)
-	routerManager.RegisterRouter(ctx, "GET", "/lxmusic/api/songlist/search", p.songlistHandler.HandleSearch, true)
-	routerManager.RegisterRouter(ctx, "GET", "/lxmusic/api/songlist/sorts", p.songlistHandler.HandleGetSorts, true)
+	routerManager.RegisterRouter(ctx, "GET", "/api/songlist/tags", p.songlistHandler.HandleGetTags, true)
+	routerManager.RegisterRouter(ctx, "GET", "/api/songlist/list", p.songlistHandler.HandleGetList, true)
+	routerManager.RegisterRouter(ctx, "GET", "/api/songlist/detail", p.songlistHandler.HandleGetDetail, true)
+	routerManager.RegisterRouter(ctx, "GET", "/api/songlist/search", p.songlistHandler.HandleSearch, true)
+	routerManager.RegisterRouter(ctx, "GET", "/api/songlist/sorts", p.songlistHandler.HandleGetSorts, true)
 
 	slog.Info("洛雪音源插件路由注册完成")
 	return &emptypb.Empty{}, nil
