@@ -31,19 +31,22 @@ type Plugin struct {
 	Version  string
 	pluginID int64
 
-	staticHandler  *plugin.StaticHandler
-	sourceManager  *source.Manager
-	sourceHandler  *handlers.SourceHandler
-	searchHandler   *handlers.SearchHandler
-	songlistHandler *handlers.SongListHandler
-	runtimeManager  *engine.RuntimeManager
-	registry        *musicsdk.Registry
-	urlmapStore     *urlmap.Store
+	staticHandler      *plugin.StaticHandler
+	sourceManager      *source.Manager
+	sourceHandler      *handlers.SourceHandler
+	searchHandler      *handlers.SearchHandler
+	songlistHandler    *handlers.SongListHandler
+	leaderboardHandler *handlers.LeaderboardHandler
+	hotSearchHandler   *handlers.HotSearchHandler
+	tipSearchHandler   *handlers.TipSearchHandler
+	runtimeManager     *engine.RuntimeManager
+	registry           *musicsdk.Registry
+	urlmapStore        *urlmap.Store
 }
 
 func init() {
 	plugin.RegisterPlugin(&Plugin{
-		Version: "2026.4.17",
+		Version: "2026.4.19-4",
 	})
 }
 
@@ -129,6 +132,9 @@ func (p *Plugin) Init(ctx context.Context, request *pbplugin.InitRequest) (*empt
 	p.sourceHandler = handlers.NewSourceHandler(p.sourceManager, p.runtimeManager, p.pluginID)
 	p.searchHandler = handlers.NewSearchHandler(p.registry, p.runtimeManager, p.urlmapStore)
 	p.songlistHandler = handlers.NewSongListHandler(p.registry)
+	p.leaderboardHandler = handlers.NewLeaderboardHandler()
+	p.hotSearchHandler = handlers.NewHotSearchHandler()
+	p.tipSearchHandler = handlers.NewTipSearchHandler()
 
 	// 8. 获取路由管理器
 	routerManager := plugin.GetRouterManager()
@@ -161,6 +167,14 @@ func (p *Plugin) Init(ctx context.Context, request *pbplugin.InitRequest) (*empt
 	routerManager.RegisterRouter(ctx, "GET", "/api/songlist/detail", p.songlistHandler.HandleGetDetail, true)
 	routerManager.RegisterRouter(ctx, "GET", "/api/songlist/search", p.songlistHandler.HandleSearch, true)
 	routerManager.RegisterRouter(ctx, "GET", "/api/songlist/sorts", p.songlistHandler.HandleGetSorts, true)
+
+	// 排行榜
+	routerManager.RegisterRouter(ctx, "GET", "/api/leaderboard/boards", p.leaderboardHandler.HandleGetBoards, false)
+	routerManager.RegisterRouter(ctx, "GET", "/api/leaderboard/list", p.leaderboardHandler.HandleGetList, false)
+	// 热搜
+	routerManager.RegisterRouter(ctx, "GET", "/api/hotSearch", p.hotSearchHandler.HandleHotSearch, false)
+	// 搜索联想
+	routerManager.RegisterRouter(ctx, "GET", "/api/tipSearch", p.tipSearchHandler.HandleTipSearch, false)
 
 	slog.Info("洛雪音源插件路由注册完成")
 	return &emptypb.Empty{}, nil
