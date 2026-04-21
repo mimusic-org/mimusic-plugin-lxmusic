@@ -43,7 +43,7 @@ func (h *SongListHandler) HandleGetTags(req *http.Request) (*plugin.RouterRespon
 		return plugin.ErrorResponse(http.StatusInternalServerError, "获取标签失败: "+err.Error()), nil
 	}
 
-	return h.jsonResponse(result)
+	return h.buildResponse(req, result, sourceID)
 }
 
 // HandleGetList 获取歌单列表
@@ -72,7 +72,7 @@ func (h *SongListHandler) HandleGetList(req *http.Request) (*plugin.RouterRespon
 		return plugin.ErrorResponse(http.StatusInternalServerError, "获取歌单列表失败: "+err.Error()), nil
 	}
 
-	return h.jsonResponse(result)
+	return h.buildResponse(req, result, sourceID)
 }
 
 // HandleGetDetail 获取歌单详情
@@ -104,7 +104,7 @@ func (h *SongListHandler) HandleGetDetail(req *http.Request) (*plugin.RouterResp
 		return plugin.ErrorResponse(http.StatusInternalServerError, "获取歌单详情失败: "+err.Error()), nil
 	}
 
-	return h.jsonResponse(result)
+	return h.buildResponse(req, result, sourceID)
 }
 
 // HandleSearch 搜索歌单
@@ -141,7 +141,7 @@ func (h *SongListHandler) HandleSearch(req *http.Request) (*plugin.RouterRespons
 		return plugin.ErrorResponse(http.StatusInternalServerError, "搜索歌单失败: "+err.Error()), nil
 	}
 
-	return h.jsonResponse(result)
+	return h.buildResponse(req, result, sourceID)
 }
 
 // HandleGetSorts 获取排序选项
@@ -159,10 +159,16 @@ func (h *SongListHandler) HandleGetSorts(req *http.Request) (*plugin.RouterRespo
 
 	sortList := provider.GetSortList()
 
-	return h.jsonResponse(sortList)
+	return h.buildResponse(req, sortList, sourceID)
 }
 
-// jsonResponse 构建 JSON 成功响应
+func (h *SongListHandler) buildResponse(req *http.Request, data interface{}, sourceID string) (*plugin.RouterResponse, error) {
+	if isTVRequest(req) {
+		return h.tvJsonResponse(data, sourceID)
+	}
+	return h.jsonResponse(data)
+}
+
 func (h *SongListHandler) jsonResponse(data interface{}) (*plugin.RouterResponse, error) {
 	response := map[string]interface{}{
 		"code": 0,
@@ -175,4 +181,35 @@ func (h *SongListHandler) jsonResponse(data interface{}) (*plugin.RouterResponse
 		Headers:    map[string]string{"Content-Type": "application/json"},
 		Body:       body,
 	}, nil
+}
+
+func (h *SongListHandler) tvJsonResponse(data interface{}, sourceID string) (*plugin.RouterResponse, error) {
+	if sourceID == "" {
+		sourceID = "unknown"
+	}
+
+	dataMap := convertToMap(data)
+	dataMap["source"] = sourceID
+
+	if list, ok := dataMap["list"].([]interface{}); ok {
+		for i := range list {
+			if item, ok := list[i].(map[string]interface{}); ok {
+				item["source"] = sourceID
+			}
+		}
+	}
+
+	body, _ := json.Marshal(dataMap)
+	return &plugin.RouterResponse{
+		StatusCode: http.StatusOK,
+		Headers:    map[string]string{"Content-Type": "application/json"},
+		Body:       body,
+	}, nil
+}
+
+func convertToMap(data interface{}) map[string]interface{} {
+	var result map[string]interface{}
+	jsonBytes, _ := json.Marshal(data)
+	json.Unmarshal(jsonBytes, &result)
+	return result
 }

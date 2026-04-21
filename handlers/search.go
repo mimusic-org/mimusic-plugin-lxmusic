@@ -664,3 +664,105 @@ func (h *SearchHandler) HandleGetMusicUrl(req *http.Request) (*plugin.RouterResp
 		Headers:    map[string]string{"Location": redirectURL},
 	}, nil
 }
+
+// HandleTVMusicUrl TV 客户端获取播放链接
+// POST /lxmusic/api/tv/music/url
+// Body: {"source": "kw", "songmid": "xxx", "quality": "320k"}
+// Response: {"url": "https://...", "type": "320k", "source": "kw"}
+func (h *SearchHandler) HandleTVMusicUrl(req *http.Request) (*plugin.RouterResponse, error) {
+	if req.Method != http.MethodPost {
+		return plugin.ErrorResponse(http.StatusMethodNotAllowed, "只支持 POST 方法"), nil
+	}
+
+	var body struct {
+		Source  string `json:"source"`
+		Songmid string `json:"songmid"`
+		Quality string `json:"quality"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		return plugin.ErrorResponse(http.StatusBadRequest, "无效的请求参数: "+err.Error()), nil
+	}
+
+	if body.Source == "" {
+		return plugin.ErrorResponse(http.StatusBadRequest, "缺少 source 参数"), nil
+	}
+	if body.Songmid == "" {
+		return plugin.ErrorResponse(http.StatusBadRequest, "缺少 songmid 参数"), nil
+	}
+
+	quality := body.Quality
+	if quality == "" {
+		quality = "320k"
+	}
+
+	songInfo := map[string]interface{}{
+		"source":  body.Source,
+		"songmid": body.Songmid,
+	}
+
+	musicUrl, err := h.runtimeManager.GetMusicUrl(body.Source, quality, songInfo)
+	if err != nil {
+		slog.Error("TV 获取播放 URL 失败", "source", body.Source, "songmid", body.Songmid, "error", err)
+		return plugin.ErrorResponse(http.StatusBadGateway, "获取播放 URL 失败: "+err.Error()), nil
+	}
+
+	if musicUrl == "" {
+		return plugin.ErrorResponse(http.StatusBadGateway, "获取到的播放 URL 为空"), nil
+	}
+
+	response := map[string]interface{}{
+		"url":    musicUrl,
+		"type":   quality,
+		"source": body.Source,
+	}
+	respBody, _ := json.Marshal(response)
+	return &plugin.RouterResponse{
+		StatusCode: http.StatusOK,
+		Headers:    map[string]string{"Content-Type": "application/json"},
+		Body:       respBody,
+	}, nil
+}
+
+// HandleTVLyric TV 客户端获取歌词
+// GET /lxmusic/api/tv/lyric?source=kw&songmid=xxx&quality=320k
+// Response: {"lyric": "...", "tlyric": "...", "rlyric": "...", "lxlyric": "..."}
+func (h *SearchHandler) HandleTVLyric(req *http.Request) (*plugin.RouterResponse, error) {
+	source := req.URL.Query().Get("source")
+	if source == "" {
+		return plugin.ErrorResponse(http.StatusBadRequest, "缺少 source 参数"), nil
+	}
+
+	songmid := req.URL.Query().Get("songmid")
+	if songmid == "" {
+		return plugin.ErrorResponse(http.StatusBadRequest, "缺少 songmid 参数"), nil
+	}
+
+	songInfo := map[string]interface{}{
+		"source":  source,
+		"songmid": songmid,
+	}
+
+	fetcher, ok := h.registry.GetLyricFetcher(source)
+	if !ok {
+		return plugin.ErrorResponse(http.StatusBadRequest, "平台不支持歌词获取: "+source), nil
+	}
+
+	result, err := fetcher.GetLyric(songInfo)
+	if err != nil {
+		slog.Error("TV 获取歌词失败", "source", source, "songmid", songmid, "error", err)
+		return plugin.ErrorResponse(http.StatusInternalServerError, "获取歌词失败: "+err.Error()), nil
+	}
+
+	response := map[string]interface{}{
+		"lyric":   result.Lyric,
+		"tlyric":  result.TLyric,
+		"rlyric":  result.RLyric,
+		"lxlyric": result.LxLyric,
+	}
+	respBody, _ := json.Marshal(response)
+	return &plugin.RouterResponse{
+		StatusCode: http.StatusOK,
+		Headers:    map[string]string{"Content-Type": "application/json"},
+		Body:       respBody,
+	}, nil
+}

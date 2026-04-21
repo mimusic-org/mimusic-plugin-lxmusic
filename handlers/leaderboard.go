@@ -33,11 +33,6 @@ func NewLeaderboardHandler() *LeaderboardHandler {
 	return &LeaderboardHandler{}
 }
 
-// isTVRequest 检查请求是否为TV模式（根据路径前缀 /tv/ 判断）
-func (h *LeaderboardHandler) isTVRequest(req *http.Request) bool {
-	return strings.HasPrefix(req.URL.Path, "/tv/")
-}
-
 // BoardItem 排行榜分类项
 type BoardItem struct {
 	ID     string `json:"id"`
@@ -97,7 +92,7 @@ func (h *LeaderboardHandler) HandleGetBoards(req *http.Request) (*plugin.RouterR
 	}
 
 	// TV模式返回lxserver原始格式
-	if h.isTVRequest(req) {
+	if isTVRequest(req) {
 		response := map[string]interface{}{
 			"source": source,
 			"list":   boards,
@@ -126,116 +121,36 @@ func (h *LeaderboardHandler) HandleGetBoards(req *http.Request) (*plugin.RouterR
 	}, nil
 }
 
-// getKuwoBoards 获取酷我排行榜分类（动态获取）
+// getKuwoBoards 获取酷我排行榜分类（硬编码）
 func (h *LeaderboardHandler) getKuwoBoards() ([]BoardItem, error) {
-	// 酷我排行榜分类通过 wbd API 获取
-	params := map[string]interface{}{
-		"uid":       "",
-		"devId":     "",
-		"sFrom":     "kuwo_sdk",
-		"user_type": "AP",
-		"carSource": "kwplayercar_ar_6.0.1.0_apk_keluze.apk",
-		"id":        "0",
-		"pn":        0,
-		"rn":        100,
-	}
-
-	body, err := h.callWbdApi("https://wbd.kuwo.cn/api/bd/bang/bang_info", params)
-	if err != nil {
-		return nil, fmt.Errorf("调用 wbd API 失败: %w", err)
-	}
-
-	var rawData map[string]interface{}
-	if err := json.Unmarshal(body, &rawData); err != nil {
-		return nil, fmt.Errorf("解析响应 JSON 失败: %w", err)
-	}
-
-	code, ok := rawData["code"].(float64)
-	if !ok || code != 200 {
-		return nil, fmt.Errorf("API 返回错误: code=%v", rawData["code"])
-	}
-
-	data, ok := rawData["data"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("响应数据格式错误")
-	}
-
-	bangList, ok := data["bangList"].([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("bangList 格式错误")
-	}
-
-	boards := make([]BoardItem, 0, len(bangList))
-	for _, item := range bangList {
-		m := item.(map[string]interface{})
-		id := h.getString(m["id"])
-		name := h.decodeName(m["name"])
-		boards = append(boards, BoardItem{
-			ID:     "kw__" + id,
-			Name:   name,
-			BangID: id,
-		})
-	}
-
-	return boards, nil
+	return []BoardItem{
+		{ID: "kw__93", Name: "飙升榜", BangID: "93"},
+		{ID: "kw__17", Name: "新歌榜", BangID: "17"},
+		{ID: "kw__16", Name: "热歌榜", BangID: "16"},
+		{ID: "kw__158", Name: "抖音热歌榜", BangID: "158"},
+		{ID: "kw__194", Name: "综艺榜", BangID: "194"},
+		{ID: "kw__95", Name: "华语榜", BangID: "95"},
+		{ID: "kw__10", Name: "欧美榜", BangID: "10"},
+		{ID: "kw__12", Name: "韩国榜", BangID: "12"},
+		{ID: "kw__11", Name: "日本榜", BangID: "11"},
+		{ID: "kw__107", Name: "苦情歌榜", BangID: "107"},
+		{ID: "kw__108", Name: "网络歌榜", BangID: "108"},
+		{ID: "kw__105", Name: "经典老歌榜", BangID: "105"},
+	}, nil
 }
 
-// getKgBoards 获取全民K歌排行榜分类（动态获取）
+// getKgBoards 获取全民K歌排行榜分类（硬编码）
 func (h *LeaderboardHandler) getKgBoards() ([]BoardItem, error) {
-	urlStr := fmt.Sprintf("http://mobilecdnbj.kugou.com/api/v5/rank/list?version=9108&plat=0&showtype=2&parentid=0&apiver=6&area_code=1&withsong=1")
-
-	resp, err := pluginhttp.Get(urlStr)
-	if err != nil {
-		return nil, fmt.Errorf("HTTP 请求失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP 状态码错误: %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("读取响应体失败: %w", err)
-	}
-
-	var rawData map[string]interface{}
-	if err := json.Unmarshal(body, &rawData); err != nil {
-		return nil, fmt.Errorf("解析响应 JSON 失败: %w", err)
-	}
-
-	errcode, _ := rawData["errcode"].(float64)
-	if errcode != 0 {
-		return nil, fmt.Errorf("API 返回错误: errcode=%v", errcode)
-	}
-
-	data, ok := rawData["data"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("data 格式错误")
-	}
-
-	ranklist, ok := data["ranklist"].([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("ranklist 格式错误")
-	}
-
-	boards := make([]BoardItem, 0)
-	for _, item := range ranklist {
-		m := item.(map[string]interface{})
-		isvol, _ := m["isvol"].(float64)
-		if isvol != 1 {
-			continue
-		}
-		rankid := h.getString(m["rankid"])
-		rankname := h.decodeName(m["rankname"])
-		boards = append(boards, BoardItem{
-			ID:     "kg__" + rankid,
-			Name:   rankname,
-			BangID: rankid,
-		})
-	}
-
-	return boards, nil
+	return []BoardItem{
+		{ID: "kg__8888", Name: "TOP500", BangID: "8888"},
+		{ID: "kg__6666", Name: "飙升榜", BangID: "6666"},
+		{ID: "kg__59703", Name: "蜂鸟流行音乐榜", BangID: "59703"},
+		{ID: "kg__52144", Name: "抖音热歌榜", BangID: "52144"},
+		{ID: "kg__36890", Name: "中文DJ榜", BangID: "36890"},
+		{ID: "kg__66662", Name: "听书排行榜", BangID: "66662"},
+		{ID: "kg__32016", Name: "广场舞排行榜", BangID: "32016"},
+		{ID: "kg__34567", Name: "K歌金曲榜", BangID: "34567"},
+	}, nil
 }
 
 // getTxBoards 获取QQ音乐排行榜分类（硬编码）
@@ -275,74 +190,20 @@ func (h *LeaderboardHandler) getWyBoards() ([]BoardItem, error) {
 	return h.getWyBoardsFromJS()
 }
 
-// getMgBoards 获取咪咕排行榜分类（动态获取）
+// getMgBoards 获取咪咕排行榜分类（硬编码）
 func (h *LeaderboardHandler) getMgBoards() ([]BoardItem, error) {
-	urlStr := "https://app.c.nf.migu.cn/pc/bmw/rank/rank-index/v1.0"
-
-	resp, err := pluginhttp.Get(urlStr)
-	if err != nil {
-		return nil, fmt.Errorf("HTTP 请求失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP 状态码错误: %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("读取响应体失败: %w", err)
-	}
-
-	var rawData map[string]interface{}
-	if err := json.Unmarshal(body, &rawData); err != nil {
-		return nil, fmt.Errorf("解析响应 JSON 失败: %w", err)
-	}
-
-	code := h.getString(rawData["code"])
-	if code != "000000" {
-		return nil, fmt.Errorf("API 返回错误: code=%s", code)
-	}
-
-	data, ok := rawData["data"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("data 格式错误")
-	}
-
-	contents, ok := data["contents"].([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("contents 格式错误")
-	}
-
-	boards := make([]BoardItem, 0)
-	for _, group := range contents {
-		groupMap, ok := group.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		items, ok := groupMap["contents"].([]interface{})
-		if !ok {
-			continue
-		}
-		for _, item := range items {
-			m, ok := item.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			rankID := h.getString(m["rankId"])
-			if rankID == "" {
-				continue
-			}
-			rankName := h.decodeName(m["rankName"])
-			boards = append(boards, BoardItem{
-				ID:     "mg__" + rankID,
-				Name:   rankName,
-				BangID: rankID,
-			})
-		}
-	}
-
-	return boards, nil
+	return []BoardItem{
+		{ID: "mg__27553319", Name: "新歌榜", BangID: "27553319"},
+		{ID: "mg__27186466", Name: "热歌榜", BangID: "27186466"},
+		{ID: "mg__27553408", Name: "原创榜", BangID: "27553408"},
+		{ID: "mg__75959118", Name: "音乐风向榜", BangID: "75959118"},
+		{ID: "mg__76557036", Name: "彩铃分贝榜", BangID: "76557036"},
+		{ID: "mg__76557745", Name: "会员臻爱榜", BangID: "76557745"},
+		{ID: "mg__23189800", Name: "港台榜", BangID: "23189800"},
+		{ID: "mg__23189399", Name: "内地榜", BangID: "23189399"},
+		{ID: "mg__19190036", Name: "欧美榜", BangID: "19190036"},
+		{ID: "mg__83176390", Name: "国风金曲榜", BangID: "83176390"},
+	}, nil
 }
 
 // HandleGetList 获取排行榜歌曲
@@ -412,7 +273,7 @@ func (h *LeaderboardHandler) HandleGetList(req *http.Request) (*plugin.RouterRes
 	}
 
 	// TV模式返回lxserver原始格式
-	if h.isTVRequest(req) {
+	if isTVRequest(req) {
 		response := map[string]interface{}{
 			"source": source,
 			"total":  total,
