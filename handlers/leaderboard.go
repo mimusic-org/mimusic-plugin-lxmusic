@@ -457,19 +457,26 @@ func (h *LeaderboardHandler) getKgImg(item map[string]interface{}) string {
 
 // getTxBoardList 获取QQ音乐排行榜歌曲
 func (h *LeaderboardHandler) getTxBoardList(bangID string, page int) ([]SongItem, int, error) {
-	// QQ音乐需要先获取period信息，这里简化处理，使用固定period
-	period := h.getTxPeriod(bangID)
-	if period == "" {
-		period = "2024-04-01" // 默认period
+	// 转换 bangID 为整数（API 要求数字类型）
+	topIDInt, err := strconv.Atoi(bangID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("bangID 无效: %w", err)
 	}
 
-	// 构建POST请求体
-	postData := map[string]interface{}{
+	// 获取最新的 period 信息
+	period := h.getTxPeriod(bangID)
+	if period == "" {
+		slog.Warn("getTxBoardList: 无法获取period，使用默认值", "bangID", bangID)
+		period = "2026-04-22" // 默认值
+	}
+
+	// 构建请求体（与 lxserver 保持一致）
+	reqData := map[string]interface{}{
 		"toplist": map[string]interface{}{
 			"module": "musicToplist.ToplistInfoServer",
 			"method": "GetDetail",
 			"param": map[string]interface{}{
-				"topid":  bangID,
+				"topid":  topIDInt, // 使用整数类型
 				"num":    100,
 				"period": period,
 			},
@@ -478,20 +485,17 @@ func (h *LeaderboardHandler) getTxBoardList(bangID string, page int) ([]SongItem
 			"uin":    0,
 			"format": "json",
 			"ct":     20,
-			"cv":     1859,
+			"cv":     1602, // 使用 1602 而不是 1859
 		},
 	}
 
-	postBody, _ := json.Marshal(postData)
+	reqJSON, _ := json.Marshal(reqData)
 
-	req, err := pluginhttp.NewRequest("POST", "https://u.y.qq.com/cgi-bin/musicu.fcg", strings.NewReader(string(postBody)))
-	if err != nil {
-		return nil, 0, fmt.Errorf("创建请求失败: %w", err)
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.1; WOW64; Trident/5.0)")
-	req.Header.Set("Content-Type", "application/json")
+	// 使用 GET + URL 参数方式（与 musicsdk tx_songlist.go 保持一致）
+	apiURL := fmt.Sprintf("https://u.y.qq.com/cgi-bin/musicu.fcg?loginUin=0&hostUin=0&format=json&inCharset=utf-8&outCharset=utf-8&notice=0&platform=wk_v15.json&needNewCode=0&data=%s",
+		url.QueryEscape(string(reqJSON)))
 
-	resp, err := pluginhttp.DefaultClient.Do(req)
+	resp, err := pluginhttp.Get(apiURL)
 	if err != nil {
 		return nil, 0, fmt.Errorf("HTTP 请求失败: %w", err)
 	}
@@ -511,9 +515,10 @@ func (h *LeaderboardHandler) getTxBoardList(bangID string, page int) ([]SongItem
 		return nil, 0, fmt.Errorf("解析响应 JSON 失败: %w", err)
 	}
 
-	code, _ := rawData["code"].(float64)
-	if code != 0 {
-		return nil, 0, fmt.Errorf("API 返回错误: code=%v", code)
+	// 检查 code 字段（添加 nil 检查防止 panic）
+	if codeVal, ok := rawData["code"].(float64); ok && codeVal != 0 {
+		slog.Error("getTxBoardList: API返回错误", "bangID", bangID, "code", codeVal)
+		return nil, 0, fmt.Errorf("API 返回错误: code=%v", codeVal)
 	}
 
 	toplist, ok := rawData["toplist"].(map[string]interface{})
@@ -521,60 +526,72 @@ func (h *LeaderboardHandler) getTxBoardList(bangID string, page int) ([]SongItem
 		return nil, 0, fmt.Errorf("toplist 格式错误")
 	}
 
-	data, ok := toplist["data"].(map[string]interface{})
+	// 检查 toplist.code
+	if codeVal, ok := toplist["code"].(float64); ok && codeVal != 0 {
+		slog.Error("getTxBoardList: toplist返回错误", "bangID", bangID, "code", codeVal)
+		return nil, 0, fmt.Errorf("toplist 返回错误: code=%v", codeVal)
+	}
+
+	data, ok := toplist["data"]
+	if !ok {
+		slog.Error("getTxBoardList: toplist.data不存在", "bangID", bangID)
+		return nil, 0, fmt.Errorf("toplist.data 格式错误")
+	}
+
+	dataMap, ok := data.(map[string]interface{})
 	if !ok {
 		return nil, 0, fmt.Errorf("toplist.data 格式错误")
 	}
 
-	songInfoList, ok := data["songInfoList"].([]interface{})
+	// dataMap 里面还有个 data 层
+	innerData, ok := dataMap["data"].(map[string]interface{})
 	if !ok {
-		return nil, 0, fmt.Errorf("songInfoList 格式错误")
+		slog.Error("getTxBoardList: toplist.data.data类型错误", "bangID", bangID)
+		return nil, 0, fmt.Errorf("toplist.data.data 格式错误")
 	}
 
-	list := make([]SongItem, 0, len(songInfoList))
-	for _, item := range songInfoList {
-		m := item.(map[string]interface{})
+	// 获取总数量
+	totalNum := 100
+	if total, ok := innerData["totalNum"].(float64); ok {
+		totalNum = int(total)
+	}
+
+	songList, ok := innerData["song"].([]interface{})
+	if !ok {
+		slog.Error("getTxBoardList: song格式错误", "bangID", bangID)
+		return nil, 0, fmt.Errorf("song 格式错误")
+	}
+
+	list := make([]SongItem, 0, len(songList))
+	for _, item := range songList {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
 		song := SongItem{
-			Name:     h.getString(m["title"]),
-			Source:   "tx",
-			Interval: h.formatPlayTime(h.getInt(m["interval"])),
-			Lrc:      nil,
+			Name:   h.getString(m["title"]),
+			Source: "tx",
+			Lrc:    nil,
 		}
 
-		// 解析歌手
-		singers, _ := m["singer"].([]interface{})
-		var singerNames []string
-		for _, s := range singers {
-			if singer, ok := s.(map[string]interface{}); ok {
-				singerNames = append(singerNames, h.getString(singer["name"]))
-			}
-		}
-		song.Singer = strings.Join(singerNames, "、")
+		// 解析歌手（singerName 是字符串）
+		song.Singer = h.getString(m["singerName"])
 
-		// 解析专辑
-		if album, ok := m["album"].(map[string]interface{}); ok {
-			song.AlbumName = h.getString(album["name"])
-			song.AlbumID = h.getString(album["mid"])
-			albumMid := h.getString(album["mid"])
-			if albumMid != "" && albumMid != "空" {
-				song.Img = fmt.Sprintf("https://y.gtimg.cn/music/photo_new/T002R500x500M000%s.jpg", albumMid)
-			}
+		// 解析专辑ID和封面
+		song.AlbumID = h.getString(m["albumMid"])
+		if albumMid := song.AlbumID; albumMid != "" {
+			song.Img = fmt.Sprintf("https://y.gtimg.cn/music/photo_new/T002R500x500M000%s.jpg", albumMid)
 		}
 
-		// 解析歌曲ID
-		if songID, ok := m["id"].(float64); ok {
-			song.SongMID = fmt.Sprintf("%.0f", songID)
-		}
-
-		// 解析音质
-		if file, ok := m["file"].(map[string]interface{}); ok {
-			song.Types = h.parseTxTypes(file)
+		// 解析歌曲ID（songId 是数字）
+		if songId, ok := m["songId"].(float64); ok {
+			song.SongMID = fmt.Sprintf("%.0f", songId)
 		}
 
 		list = append(list, song)
 	}
 
-	return list, len(list), nil
+	return list, totalNum, nil
 }
 
 // parseTxTypes 解析QQ音乐音质信息

@@ -206,6 +206,12 @@ func (h *SongListHandler) tvJsonResponse(data interface{}, sourceID string) (*pl
 		for i := range list {
 			if item, ok := list[i].(map[string]interface{}); ok {
 				item["source"] = sourceID
+				// 映射 MusicID 到 songmid（TV 应用期望 songmid 或 id）
+				if musicId, ok := item["musicId"].(string); ok && musicId != "" {
+					if _, hasSongmid := item["songmid"]; !hasSongmid {
+						item["songmid"] = musicId
+					}
+				}
 			}
 		}
 	}
