@@ -46,7 +46,7 @@ type Plugin struct {
 
 func init() {
 	plugin.RegisterPlugin(&Plugin{
-		Version: "2026.4.20-2",
+		Version: "2026.4.21-9",
 	})
 }
 
@@ -177,25 +177,25 @@ func (p *Plugin) Init(ctx context.Context, request *pbplugin.InitRequest) (*empt
 	routerManager.RegisterRouter(ctx, "GET", "/api/tipSearch", p.tipSearchHandler.HandleTipSearch, false)
 
 	// TV 客户端接口（与上述接口一一对应）
-	// 音源管理
-	routerManager.RegisterRouter(ctx, "GET", "/api/tv/sources", p.sourceHandler.HandleListSources, true)
-	routerManager.RegisterRouter(ctx, "POST", "/api/tv/sources/import", p.sourceHandler.HandleImportSource, true)
-	routerManager.RegisterRouter(ctx, "POST", "/api/tv/sources/import-url", p.sourceHandler.HandleImportSourceFromURL, true)
-	routerManager.RegisterRouter(ctx, "DELETE", "/api/tv/sources", p.sourceHandler.HandleDeleteSource, true)
-	routerManager.RegisterRouter(ctx, "PUT", "/api/tv/sources/toggle", p.sourceHandler.HandleToggleSource, true)
-	routerManager.RegisterRouter(ctx, "POST", "/api/tv/songs/import", p.searchHandler.HandleImportSongs, true)
-	// 搜索和导入
+	// 音源管理 TV端暂不需要
+	// routerManager.RegisterRouter(ctx, "GET", "/api/tv/sources", p.sourceHandler.HandleListSources, true)
+	// routerManager.RegisterRouter(ctx, "POST", "/api/tv/sources/import", p.sourceHandler.HandleImportSource, true)
+	// routerManager.RegisterRouter(ctx, "POST", "/api/tv/sources/import-url", p.sourceHandler.HandleImportSourceFromURL, true)
+	// routerManager.RegisterRouter(ctx, "DELETE", "/api/tv/sources", p.sourceHandler.HandleDeleteSource, true)
+	// routerManager.RegisterRouter(ctx, "PUT", "/api/tv/sources/toggle", p.sourceHandler.HandleToggleSource, true)
+	// routerManager.RegisterRouter(ctx, "POST", "/api/tv/songs/import", p.searchHandler.HandleImportSongs, true)
+	// 搜索
 	routerManager.RegisterRouter(ctx, "GET", "/api/tv/search", p.searchHandler.HandleSearch, false)
 	routerManager.RegisterRouter(ctx, "GET", "/api/tv/platforms", p.searchHandler.HandleListPlatforms, false)
 	// 播放URL和歌词
 	routerManager.RegisterRouter(ctx, "POST", "/api/tv/music/url", p.searchHandler.HandleTVMusicUrl, false)
 	routerManager.RegisterRouter(ctx, "GET", "/api/tv/lyric", p.searchHandler.HandleTVLyric, false)
 	// 歌单
-	routerManager.RegisterRouter(ctx, "GET", "/api/tv/songlist/tags", p.songlistHandler.HandleGetTags, false)
-	routerManager.RegisterRouter(ctx, "GET", "/api/tv/songlist/list", p.songlistHandler.HandleGetList, false)
-	routerManager.RegisterRouter(ctx, "GET", "/api/tv/songlist/detail", p.songlistHandler.HandleGetDetail, false)
-	routerManager.RegisterRouter(ctx, "GET", "/api/tv/songlist/search", p.songlistHandler.HandleSearch, false)
-	routerManager.RegisterRouter(ctx, "GET", "/api/tv/songlist/sorts", p.songlistHandler.HandleGetSorts, false)
+	routerManager.RegisterRouter(ctx, "GET", "/api/tv/songList/tags", p.songlistHandler.HandleGetTags, false)
+	routerManager.RegisterRouter(ctx, "GET", "/api/tv/songList/list", p.songlistHandler.HandleGetList, false)
+	routerManager.RegisterRouter(ctx, "GET", "/api/tv/songList/detail", p.songlistHandler.HandleGetDetail, false)
+	routerManager.RegisterRouter(ctx, "GET", "/api/tv/songList/search", p.songlistHandler.HandleSearch, false)
+	routerManager.RegisterRouter(ctx, "GET", "/api/tv/songList/sorts", p.songlistHandler.HandleGetSorts, false)
 	// 排行榜
 	routerManager.RegisterRouter(ctx, "GET", "/api/tv/leaderboard/boards", p.leaderboardHandler.HandleGetBoards, false)
 	routerManager.RegisterRouter(ctx, "GET", "/api/tv/leaderboard/list", p.leaderboardHandler.HandleGetList, false)

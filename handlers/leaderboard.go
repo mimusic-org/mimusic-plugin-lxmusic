@@ -235,33 +235,18 @@ func (h *LeaderboardHandler) HandleGetList(req *http.Request) (*plugin.RouterRes
 	switch source {
 	case "kw":
 		bangID := strings.TrimPrefix(boardID, "kw__")
-		if bangID == boardID {
-			return plugin.ErrorResponse(http.StatusBadRequest, "无效的 boardId 格式"), nil
-		}
 		list, total, err = h.getKuwoBoardList(bangID, page)
 	case "kg":
 		bangID := strings.TrimPrefix(boardID, "kg__")
-		if bangID == boardID {
-			return plugin.ErrorResponse(http.StatusBadRequest, "无效的 boardId 格式"), nil
-		}
 		list, total, err = h.getKgBoardList(bangID, page)
 	case "tx":
 		bangID := strings.TrimPrefix(boardID, "tx__")
-		if bangID == boardID {
-			return plugin.ErrorResponse(http.StatusBadRequest, "无效的 boardId 格式"), nil
-		}
 		list, total, err = h.getTxBoardList(bangID, page)
 	case "wy":
 		bangID := strings.TrimPrefix(boardID, "wy__")
-		if bangID == boardID {
-			return plugin.ErrorResponse(http.StatusBadRequest, "无效的 boardId 格式"), nil
-		}
 		list, total, err = h.getWyBoardList(bangID, page)
 	case "mg":
 		bangID := strings.TrimPrefix(boardID, "mg__")
-		if bangID == boardID {
-			return plugin.ErrorResponse(http.StatusBadRequest, "无效的 boardId 格式"), nil
-		}
 		list, total, err = h.getMgBoardList(bangID, page)
 	default:
 		return plugin.ErrorResponse(http.StatusBadRequest, "暂不支持该平台: "+source), nil
