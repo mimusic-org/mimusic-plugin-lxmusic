@@ -165,6 +165,10 @@ func (p *Plugin) Init(ctx context.Context, request *pbplugin.InitRequest) (*empt
 	// 获取歌词（不需要认证，延迟加载时主程序直接调用）
 	routerManager.RegisterRouter(ctx, "GET", "/api/lyric/url/{hash}", p.searchHandler.HandleGetLyric, false)
 
+	// 通用直接接口（需要认证，供其他插件调用）
+	routerManager.RegisterRouter(ctx, "POST", "/api/direct/music/url", p.searchHandler.HandleDirectMusicUrl)
+	routerManager.RegisterRouter(ctx, "GET", "/api/direct/lyric", p.searchHandler.HandleDirectLyric)
+
 	// 歌单（需要认证）
 	routerManager.RegisterRouter(ctx, "GET", "/api/songlist/tags", p.songlistHandler.HandleGetTags, true)
 	routerManager.RegisterRouter(ctx, "GET", "/api/songlist/list", p.songlistHandler.HandleGetList, true)

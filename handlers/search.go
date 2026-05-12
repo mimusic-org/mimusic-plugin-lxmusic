@@ -678,3 +678,123 @@ func (h *SearchHandler) HandleGetMusicUrl(req *http.Request) (*plugin.RouterResp
 		Headers:    map[string]string{"Location": redirectURL},
 	}, nil
 }
+
+// MusicUrlRequest 获取播放URL请求（通用格式）
+type MusicUrlRequest struct {
+	SongInfo struct {
+		Source  string `json:"source"`  // 音乐来源 (kw/kg/tx/wy/mg)
+		Songmid string `json:"songmid"` // 歌曲MID
+	} `json:"songInfo"`
+	Quality string `json:"quality"` // 音质要求 (flac/320k/128k)
+}
+
+// MusicUrlResponse 获取播放URL响应
+type MusicUrlResponse struct {
+	URL    string `json:"url"`    // 音乐播放URL
+	Type   string `json:"type"`   // 类型
+	Source string `json:"source"` // 来源
+}
+
+// LyricInfo 歌词信息
+type LyricInfo struct {
+	Lyric   string `json:"lyric"`   // 原歌词
+	Tlyric  string `json:"tlyric"`  // 翻译歌词
+	Rlyric  string `json:"rlyric"`  // 罗马音歌词
+	Lxlyric string `json:"lxlyric"` // 逐字歌词(卡拉OK格式)
+}
+
+// HandleDirectMusicUrl 直接获取播放链接（不经过 hash）
+func (h *SearchHandler) HandleDirectMusicUrl(req *http.Request) (*plugin.RouterResponse, error) {
+	if req.Method != http.MethodPost {
+		return plugin.ErrorResponse(http.StatusMethodNotAllowed, "只支持 POST 方法"), nil
+	}
+
+	var mreq MusicUrlRequest
+	if err := json.NewDecoder(req.Body).Decode(&mreq); err != nil {
+		return plugin.ErrorResponse(http.StatusBadRequest, "无效的请求参数: "+err.Error()), nil
+	}
+
+	source := mreq.SongInfo.Source
+	songmid := mreq.SongInfo.Songmid
+
+	if source == "" || songmid == "" {
+		return plugin.ErrorResponse(http.StatusBadRequest, "songInfo.source 和 songInfo.songmid 不能为空"), nil
+	}
+
+	quality := mreq.Quality
+	if quality == "" {
+		quality = "320k"
+	}
+
+	songInfo := map[string]interface{}{
+		"source":  source,
+		"songmid": songmid,
+	}
+
+	musicUrl, err := h.runtimeManager.GetMusicUrl(source, quality, songInfo)
+	if err != nil {
+		slog.Error("Direct 获取播放 URL 失败", "source", source, "songmid", songmid, "error", err)
+		if errors.Is(err, engine.ErrNoSourceLoaded) {
+			return plugin.ErrorResponse(http.StatusServiceUnavailable, "尚未配置有效的洛雪音源，无法获取播放链接"), nil
+		}
+		if errors.Is(err, engine.ErrPlatformNotSupported) {
+			return plugin.ErrorResponse(http.StatusServiceUnavailable, "当前没有支持该平台的音源"), nil
+		}
+		return plugin.ErrorResponse(http.StatusBadGateway, "获取播放 URL 失败: "+err.Error()), nil
+	}
+
+	if musicUrl == "" {
+		return plugin.ErrorResponse(http.StatusBadGateway, "获取到的播放 URL 为空"), nil
+	}
+
+	response := MusicUrlResponse{
+		URL:    musicUrl,
+		Type:   quality,
+		Source: source,
+	}
+	respBody, _ := json.Marshal(response)
+	return &plugin.RouterResponse{
+		StatusCode: http.StatusOK,
+		Headers:    map[string]string{"Content-Type": "application/json"},
+		Body:       respBody,
+	}, nil
+}
+
+// HandleDirectLyric 直接获取歌词（不经过 hash）
+func (h *SearchHandler) HandleDirectLyric(req *http.Request) (*plugin.RouterResponse, error) {
+	source := req.URL.Query().Get("source")
+	songmid := req.URL.Query().Get("songmid")
+
+	if source == "" || songmid == "" {
+		return plugin.ErrorResponse(http.StatusBadRequest, "source 和 songmid 不能为空"), nil
+	}
+
+	songInfo := map[string]interface{}{
+		"source":  source,
+		"songmid": songmid,
+	}
+
+	fetcher, ok := h.registry.GetLyricFetcher(source)
+	if !ok {
+		return plugin.ErrorResponse(http.StatusBadRequest, "平台不支持歌词获取: "+source), nil
+	}
+
+	result, err := fetcher.GetLyric(songInfo)
+	if err != nil {
+		slog.Error("Direct 获取歌词失败", "source", source, "songmid", songmid, "error", err)
+		return plugin.ErrorResponse(http.StatusInternalServerError, "获取歌词失败: "+err.Error()), nil
+	}
+
+	info := LyricInfo{
+		Lyric:   result.Lyric,
+		Tlyric:  result.TLyric,
+		Rlyric:  result.RLyric,
+		Lxlyric: result.LxLyric,
+	}
+	respBody, _ := json.Marshal(info)
+	return &plugin.RouterResponse{
+		StatusCode: http.StatusOK,
+		Headers:    map[string]string{"Content-Type": "application/json"},
+		Body:       respBody,
+	}, nil
+}
